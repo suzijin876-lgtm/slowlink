@@ -109,7 +109,7 @@ class DistributionSystemTests(unittest.TestCase):
         self.assertNotIn('docker stop "$REDIS_CONTAINER"', preserve_section)
         self.assertNotIn('docker volume rm', preserve_section)
 
-    def test_release_workflow_builds_four_verified_assets(self):
+    def test_release_workflow_publishes_only_required_assets_and_uses_changelog_body(self):
         text = self.read_required(".github/workflows/release.yml")
 
         for fragment in (
@@ -122,8 +122,24 @@ class DistributionSystemTests(unittest.TestCase):
             'sha256sum -c SHA256SUMS.txt',
             'gh release create',
             'GH_TOKEN:',
+            '--notes-file "dist/slowlink_v${file_version}_update_log.txt"',
         ):
             self.assertIn(fragment, text)
+
+        self.assertNotIn('--generate-notes', text)
+
+        publish_assets = text.split('gh release create', 1)[1].split('--verify-tag', 1)[0]
+        self.assertIn('"dist/slowlink_app_v${file_version}.zip"', publish_assets)
+        self.assertIn('"dist/slowlink_v${file_version}_full.zip"', publish_assets)
+        self.assertIn('dist/SHA256SUMS.txt', publish_assets)
+        self.assertNotIn('"dist/slowlink_v${file_version}_update_log.txt"', publish_assets)
+
+    def test_readme_lists_three_release_assets_and_keeps_update_log_offline(self):
+        text = self.read_required("README.md")
+
+        self.assertIn("三个资产", text)
+        self.assertIn("本地归档", text)
+        self.assertNotIn("| `slowlink_v*_update_log.txt` |", text)
 
     def test_release_builder_creates_exact_verified_assets(self):
         builder_path = ROOT / "scripts" / "build_release.py"
@@ -191,7 +207,11 @@ class DistributionSystemTests(unittest.TestCase):
 
             self.assertIn("## [1.38.75]", update_log.read_text(encoding="utf-8"))
             checksum_lines = checksum_file.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(len(checksum_lines), 3)
+            self.assertEqual(len(checksum_lines), 2)
+            self.assertEqual(
+                {line.split("  ", 1)[1] for line in checksum_lines},
+                {app_zip.name, full_zip.name},
+            )
             for line in checksum_lines:
                 digest, name = line.split("  ", 1)
                 payload = (output_dir / name).read_bytes()

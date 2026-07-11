@@ -85,16 +85,15 @@ flowchart LR
 
 ## 版本发布
 
-推送 `v*` 标签后，GitHub Actions 会自动运行编译检查、单元测试和 Shell 语法检查，并发布四个资产：
+推送 `v*` 标签后，GitHub Actions 会自动运行编译检查、单元测试和 Shell 语法检查，并发布三个资产：
 
 | 资产 | 用途 |
 | --- | --- |
 | `slowlink_app_v*.zip` | 仅应用代码更新包 |
 | `slowlink_v*_full.zip` | 完整安装包 |
-| `slowlink_v*_update_log.txt` | 当前版本更新说明 |
 | `SHA256SUMS.txt` | 发布文件完整性校验 |
 
-最新版本请前往 [GitHub Releases](https://github.com/suzijin876-lgtm/slowlink/releases/latest) 下载。
+更新内容会直接写入 GitHub Release 正文；`slowlink_v*_update_log.txt` 仅保留在本地归档中，不上传到 Release。最新版本请前往 [GitHub Releases](https://github.com/suzijin876-lgtm/slowlink/releases/latest) 下载。
 
 ## 项目结构
 

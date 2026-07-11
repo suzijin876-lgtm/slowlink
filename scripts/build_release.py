@@ -156,7 +156,7 @@ def build(version: str, output_dir: Path) -> list[Path]:
 
     checksum_lines = [
         f"{_sha256(path)}  {path.name}"
-        for path in (app_path, full_path, log_path)
+        for path in (app_path, full_path)
     ]
     checksum_path.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8", newline="\n")
     for line in checksum_lines:

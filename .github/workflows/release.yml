@@ -56,8 +56,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "dist/slowlink_app_v${file_version}.zip" \
             "dist/slowlink_v${file_version}_full.zip" \
-            "dist/slowlink_v${file_version}_update_log.txt" \
             dist/SHA256SUMS.txt \
             --verify-tag \
             --title "SlowLink $GITHUB_REF_NAME" \
-            --generate-notes
+            --notes-file "dist/slowlink_v${file_version}_update_log.txt"
