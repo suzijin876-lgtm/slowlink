@@ -139,6 +139,7 @@ copy_release_files() {
   mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/data/sessions"
   rm -rf -- "$INSTALL_DIR/app"
   cp -a "$stage"/. "$INSTALL_DIR"/ || die "复制程序文件失败"
+  find "$INSTALL_DIR/app" -type f -exec touch {} +
   mkdir -p "$INSTALL_DIR/data/sessions"
   chmod 755 "$INSTALL_DIR/install.sh" "$INSTALL_DIR/manage.sh" "$INSTALL_DIR/uninstall.sh"
   chmod 755 "$INSTALL_DIR/scripts/distribution_lib.sh" "$INSTALL_DIR/ops/slowlink_watchdog.sh"
@@ -168,6 +169,12 @@ wait_for_app_health() {
   return 1
 }
 
+verify_container_version() {
+  expected_version=$(cat "$INSTALL_DIR/VERSION")
+  actual_version=$(docker exec "$APP_CONTAINER" python -c 'import config; print(config.APP_VERSION)' 2>/dev/null || true)
+  [ -n "$actual_version" ] && [ "$actual_version" = "$expected_version" ]
+}
+
 show_diagnostics() {
   printf '\n[中文诊断] SlowLink 未通过健康检查\n' >&2
   docker compose -f "$INSTALL_DIR/docker-compose.yml" config 2>&1 | tail -n 40 >&2 || true
@@ -187,5 +194,16 @@ deploy_application() {
   if ! wait_for_app_health 90; then
     show_diagnostics
     die "slowlink_app 在 90 秒内未通过健康检查"
+  fi
+  if ! verify_container_version; then
+    warn "容器版本与发布版本不一致，刷新构建上下文并无缓存重建一次"
+    find "$INSTALL_DIR/app" -type f -exec touch {} +
+    docker compose build --no-cache app || die "slowlink_app 无缓存重建失败"
+    docker compose up -d --no-deps app || die "slowlink_app 无缓存重建后启动失败"
+    if ! wait_for_app_health 90; then
+      show_diagnostics
+      die "slowlink_app 无缓存重建后未通过健康检查"
+    fi
+    verify_container_version || die "容器版本校验失败"
   fi
 }

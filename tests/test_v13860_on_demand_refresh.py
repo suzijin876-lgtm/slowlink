@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
-EXPECTED_VERSION = "1.38.74"
+EXPECTED_VERSION = "1.38.75"
 
 
 def read(path: Path) -> str:
