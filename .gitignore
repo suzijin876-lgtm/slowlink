@@ -1,6 +1,12 @@
 .env
 .env.*
 !.env.example
+credentials.json
+secrets/
+*.token
+*.secret
+*.pem
+*.key
 
 data/
 sessions/

@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -151,16 +152,17 @@ class DistributionSystemTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        version = "1.38.76"
+        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        suffix = version.replace(".", "_")
         expected_names = (
-            "slowlink_app_v1_38_76.zip",
-            "slowlink_v1_38_76_full.zip",
-            "slowlink_v1_38_76_update_log.txt",
+            f"slowlink_app_v{suffix}.zip",
+            f"slowlink_v{suffix}_full.zip",
+            f"slowlink_v{suffix}_update_log.txt",
             "SHA256SUMS.txt",
         )
-        self.assertEqual(module.file_version(version), "1_38_76")
+        self.assertEqual(module.file_version(version), suffix)
         self.assertEqual(module.expected_asset_names(version), expected_names)
-        self.assertIn("## [1.38.76]", module.extract_changelog(version))
+        self.assertIn(f"## [{version}]", module.extract_changelog(version))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -205,7 +207,7 @@ class DistributionSystemTests(unittest.TestCase):
                 self.assertFalse(any(part in normalized for part in forbidden_parts[1:]), member)
                 self.assertFalse(normalized.endswith((".session", ".sqlite", ".sqlite3", ".db", ".rdb", ".log")), member)
 
-            self.assertIn("## [1.38.76]", update_log.read_text(encoding="utf-8"))
+            self.assertIn(f"## [{version}]", update_log.read_text(encoding="utf-8"))
             checksum_lines = checksum_file.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(checksum_lines), 2)
             self.assertEqual(
@@ -217,14 +219,46 @@ class DistributionSystemTests(unittest.TestCase):
                 payload = (output_dir / name).read_bytes()
                 self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
 
-    def test_repository_root_contains_no_historical_packages_or_runtime_data(self):
+    def test_repository_root_ignores_runtime_data_without_requiring_local_deletion(self):
         version_dirs = [path.name for path in ROOT.iterdir() if path.is_dir() and path.name.startswith("V1.")]
         deploy_archives = [path.name for path in ROOT.iterdir() if path.is_file() and path.suffix.lower() == ".zip"]
 
         self.assertEqual(version_dirs, [])
         self.assertEqual(deploy_archives, [])
-        for relative_path in (".env", "data", "watchdog.log"):
-            self.assertFalse((ROOT / relative_path).exists(), relative_path)
+
+        tracked = subprocess.run(
+            ["git", "ls-files"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        forbidden_prefixes = ("data/", "sessions/", "backups/", "backup/", "secrets/")
+        forbidden_suffixes = (".session", ".sqlite", ".sqlite3", ".db", ".rdb", ".log", ".token", ".secret", ".pem", ".key")
+        for path in tracked:
+            self.assertNotEqual(path, ".env", path)
+            self.assertNotEqual(path, "credentials.json", path)
+            self.assertFalse(path.startswith(forbidden_prefixes), path)
+            self.assertFalse(path.endswith(forbidden_suffixes), path)
+
+        ignored_paths = (
+            ".env",
+            ".env.production",
+            "data/runtime.sqlite",
+            "sessions/account.session",
+            "watchdog.log",
+            "backups/slowlink.tar.gz",
+            "secrets/token.txt",
+            "token.secret",
+            "private.key",
+            "credentials.json",
+        )
+        for path in ignored_paths:
+            ignored = subprocess.run(
+                ["git", "check-ignore", "--quiet", "--no-index", path],
+                cwd=ROOT,
+            )
+            self.assertEqual(ignored.returncode, 0, path)
 
 
 if __name__ == "__main__":
