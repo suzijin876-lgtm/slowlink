@@ -16,7 +16,9 @@ class DistributionSystemTests(unittest.TestCase):
         return path.read_text(encoding="utf-8")
 
     def test_install_script_has_public_release_contract(self):
-        text = self.read_required("install.sh")
+        install_text = self.read_required("install.sh")
+        library_text = self.read_required("scripts/distribution_lib.sh")
+        text = install_text + "\n" + library_text
 
         for fragment in (
             'REPO="suzijin876-lgtm/slowlink"',
@@ -44,7 +46,9 @@ class DistributionSystemTests(unittest.TestCase):
         self.assertNotIn("docker stop slowlink_redis", text)
 
     def test_install_script_protects_runtime_data_before_copying(self):
-        text = self.read_required("install.sh")
+        install_text = self.read_required("install.sh")
+        library_text = self.read_required("scripts/distribution_lib.sh")
+        text = install_text + "\n" + library_text
 
         for fragment in (
             ".env",
@@ -57,8 +61,8 @@ class DistributionSystemTests(unittest.TestCase):
         ):
             self.assertIn(fragment, text)
 
-        guard = text.index("安装包包含禁止部署的运行时数据")
-        copy = text.index('copy_release_files "$STAGE"')
+        guard = install_text.index('validate_release_archive "$FULL_FILE"')
+        copy = install_text.index('copy_release_files "$STAGE"')
         self.assertLess(guard, copy)
 
     def test_manage_script_exposes_scoped_commands(self):
