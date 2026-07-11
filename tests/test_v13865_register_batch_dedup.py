@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import importlib
 import sys
 import types
@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
-EXPECTED_VERSION = "1.38.75"
+EXPECTED_VERSION = "1.38.76"
 
 
 def read(path: Path) -> str:

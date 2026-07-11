@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
-EXPECTED_VERSION = "1.38.75"
+EXPECTED_VERSION = "1.38.76"
 LEGACY_PURE_CODE_RULE = r"^(?!.*码使用)[^-]+-\d+-(?:Register|Renew)_.+$"
 SAFE_PURE_CODE_RULE = (
     r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"

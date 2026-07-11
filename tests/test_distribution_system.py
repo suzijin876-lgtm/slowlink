@@ -151,16 +151,16 @@ class DistributionSystemTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        version = "1.38.75"
+        version = "1.38.76"
         expected_names = (
-            "slowlink_app_v1_38_75.zip",
-            "slowlink_v1_38_75_full.zip",
-            "slowlink_v1_38_75_update_log.txt",
+            "slowlink_app_v1_38_76.zip",
+            "slowlink_v1_38_76_full.zip",
+            "slowlink_v1_38_76_update_log.txt",
             "SHA256SUMS.txt",
         )
-        self.assertEqual(module.file_version(version), "1_38_75")
+        self.assertEqual(module.file_version(version), "1_38_76")
         self.assertEqual(module.expected_asset_names(version), expected_names)
-        self.assertIn("## [1.38.75]", module.extract_changelog(version))
+        self.assertIn("## [1.38.76]", module.extract_changelog(version))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
@@ -205,7 +205,7 @@ class DistributionSystemTests(unittest.TestCase):
                 self.assertFalse(any(part in normalized for part in forbidden_parts[1:]), member)
                 self.assertFalse(normalized.endswith((".session", ".sqlite", ".sqlite3", ".db", ".rdb", ".log")), member)
 
-            self.assertIn("## [1.38.75]", update_log.read_text(encoding="utf-8"))
+            self.assertIn("## [1.38.76]", update_log.read_text(encoding="utf-8"))
             checksum_lines = checksum_file.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(checksum_lines), 2)
             self.assertEqual(
