@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
-EXPECTED_VERSION = "1.38.73"
+EXPECTED_VERSION = "1.38.74"
 SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
     r"(?:-[^\s*`-]+)*-(?:Register|Renew)_[A-Za-z0-9_-]+"

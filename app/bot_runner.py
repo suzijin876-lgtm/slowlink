@@ -5,7 +5,7 @@ import random
 from datetime import datetime, timezone
 from typing import Optional
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils as telethon_utils
 from telethon.errors import FloodWaitError
 
 from config import SESSION_PATH, LISTENER_WORKERS, LOG_VERBOSE
@@ -57,6 +57,21 @@ class BotManager:
         self._reconnect_requested = False
         self._reconnect_reason = ""
         self._dedup_settings = (0.0, True, "strict", 20, 20)  # (ts, enabled, mode, other_minutes, code_minutes)
+        self._monitor_peer_ids = frozenset()
+        self._monitor_filter_complete = False
+        self._monitor_filter_dirty = True
+        self._monitor_filter_refresh_ts = 0.0
+        self._flow_last_publish_ts = time.monotonic()
+        self._flow_counters = {
+            "received": 0,
+            "fast_filtered": 0,
+            "handler_entered": 0,
+            "fallback_filtered": 0,
+            "enqueued": 0,
+            "queue_full": 0,
+            "matched": 0,
+            "forwarded": 0,
+        }
 
     def _cached_set(self, key: str, ttl: float = 30.0) -> set[str]:
         now = time.time()
@@ -101,6 +116,70 @@ class BotManager:
         self._target_entity_cache.clear()
         self._source_cache.clear()
         self._str_cache.clear()
+        self._monitor_filter_dirty = True
+
+    def _refresh_monitor_peer_filter(self):
+        monitors = self._cached_set("monitor_chats", ttl=0.0)
+        peer_ids: set[int] = set()
+        unresolved = []
+        for value in monitors:
+            key = normalize_chat_value(value)
+            entity = self.entity_cache.get(key)
+            if entity is None and key.startswith("@"):
+                entity = self.entity_cache.get(key[1:])
+            elif entity is None and key and not key.startswith("@"):
+                entity = self.entity_cache.get("@" + key)
+            if entity is not None:
+                try:
+                    peer_ids.add(int(telethon_utils.get_peer_id(entity)))
+                    continue
+                except Exception:
+                    pass
+            if key.startswith("-") and key[1:].isdigit():
+                peer_ids.add(int(key))
+                continue
+            unresolved.append(key)
+        self._monitor_peer_ids = frozenset(peer_ids)
+        self._monitor_filter_complete = not unresolved
+        self._monitor_filter_dirty = False
+        self._monitor_filter_refresh_ts = time.monotonic()
+
+    def _fast_event_filter(self, event):
+        self._flow_counters["received"] += 1
+        if self._monitor_filter_dirty or not self._monitor_filter_complete or not self._monitor_peer_ids:
+            return True
+        try:
+            chat_id = getattr(event, "chat_id", None)
+            if chat_id is not None:
+                chat_id = int(chat_id)
+            if chat_id is not None and chat_id not in self._monitor_peer_ids:
+                self._flow_counters["fast_filtered"] += 1
+                return False
+        except Exception:
+            return True
+        return True
+
+    def _publish_flow_stats(self, now: float | None = None, force: bool = False):
+        now = float(now if now is not None else time.monotonic())
+        window_seconds = max(1, int(now - self._flow_last_publish_ts))
+        if not force and window_seconds < 60:
+            return
+        stats = dict(self._flow_counters)
+        stats.update({
+            "ts": int(time.time()),
+            "window_seconds": window_seconds,
+            "normal_queue": self.queue.qsize() if self.queue else 0,
+            "priority_queue": self.priority_queue.qsize() if self.priority_queue else 0,
+            "monitor_peer_ids": len(self._monitor_peer_ids),
+            "monitor_filter_complete": self._monitor_filter_complete,
+        })
+        try:
+            r.set("listener_flow_stats", _json.dumps(stats, ensure_ascii=False))
+        except Exception:
+            return
+        for key in self._flow_counters:
+            self._flow_counters[key] = 0
+        self._flow_last_publish_ts = now
 
     def _perf_int(self, value) -> int:
         try:
@@ -257,6 +336,7 @@ class BotManager:
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
         dialogs = await client.get_dialogs(limit=None)
         self.entity_cache = build_entity_cache(dialogs)
+        self._refresh_monitor_peer_filter()
         self._verbose_event("info", f"已刷新会话缓存：{len(dialogs)} 个，快速解析缓存：{len(self.entity_cache)} 个键")
 
         me = await client.get_me()
@@ -278,8 +358,9 @@ class BotManager:
         self.workers += [asyncio.create_task(self._normal_worker(client, i)) for i in range(normal_worker_count)]
         self._verbose_log("info", f"消息处理线程已启动：优先 {PRIORITY_WORKER_COUNT}，普通 {normal_worker_count}")
 
-        @client.on(events.NewMessage(incoming=True))
+        @client.on(events.NewMessage(incoming=True, func=self._fast_event_filter))
         async def handler(event):
+            self._flow_counters["handler_entered"] += 1
             try:
                 chat2 = event.chat
                 if chat2 is not None:
@@ -287,6 +368,7 @@ class BotManager:
                     ck = {_ncv(x) for x in _gck(chat2)}
                     ms = self._cached_set("monitor_chats", ttl=60.0)
                     if ms and not (ck & ms):
+                        self._flow_counters["fallback_filtered"] += 1
                         return
             except Exception:
                 pass
@@ -316,9 +398,12 @@ class BotManager:
                 is_priority = any(k in low_text for k in ["register", "renew", "抽奖", "开放注册", "自由注册", "开注", "邀请码", "注册码", "已为您生成", "总注册限制", "已注册人数", "剩余可注册", "开启注册", "定时注册"])
                 if is_priority and self.priority_queue:
                     self.priority_queue.put_nowait(payload)
+                    self._flow_counters["enqueued"] += 1
                 elif self.queue:
                     self.queue.put_nowait(payload)
+                    self._flow_counters["enqueued"] += 1
             except asyncio.QueueFull:
+                self._flow_counters["queue_full"] += 1
                 add_fail({"stage": "queue", "error": "消息队列已满，丢弃一条新消息"})
                 push_event("error", "消息队列已满，可能监听源过多或正则过慢")
 
@@ -342,6 +427,10 @@ class BotManager:
                     await asyncio.sleep(5)
                     continue
             now = time.time()
+            monotonic_now = time.monotonic()
+            if self._monitor_filter_dirty or monotonic_now - self._monitor_filter_refresh_ts >= 60:
+                self._refresh_monitor_peer_filter()
+            self._publish_flow_stats(monotonic_now)
             # Proactive reconnect every 2h to keep connection fresh with less churn.
             if now - self._last_delay_reconnect_ts >= 7200 and not self._reconnect_requested and self._telegram_delay_high_count == 0:
                 q = self.queue.qsize() if self.queue else 0
@@ -591,6 +680,7 @@ class BotManager:
             perf["match_ms"] = int((time.monotonic() - t0) * 1000)
             if not matched:
                 return
+            self._flow_counters["matched"] += 1
             code_detail = analysis.get("code_detail") or {}
             source_name = self._source_name(chat)
 
@@ -693,6 +783,7 @@ class BotManager:
             # Code-level dedup already marked atomically above
 
             if sent:
+                self._flow_counters["forwarded"] += 1
                 status = "已转发：" + ", ".join(sent) + f"；内部耗时 {elapsed:.2f}s"
                 if telegram_delay_sec >= 2:
                     status += f"；Telegram推送延迟 {telegram_delay_sec:.1f}s"
@@ -864,6 +955,7 @@ class BotManager:
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
         dialogs = await client.get_dialogs(limit=None)
         self.entity_cache = build_entity_cache(dialogs)
+        self._monitor_filter_dirty = True
         targets = split_dialog_values(target_raw)
         if not targets:
             raise ValueError("请先设置转发目标")
@@ -905,6 +997,7 @@ class BotManager:
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
         dialogs = await client.get_dialogs(limit=None)
         self.entity_cache = build_entity_cache(dialogs)
+        self._monitor_filter_dirty = True
         entity = await resolve_entity(client, source, cache=self.entity_cache, refresh=True)
         title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or "未知"
         username = getattr(entity, "username", None)
@@ -946,6 +1039,7 @@ class BotManager:
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
         dialogs = await client.get_dialogs(limit=None)
         self.entity_cache = build_entity_cache(dialogs)
+        self._monitor_filter_dirty = True
         out: list[dict] = []
         seen: set[str] = set()
         for dialog in dialogs:

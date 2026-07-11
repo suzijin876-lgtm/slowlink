@@ -49,6 +49,8 @@ show_status() {
     printf '监听状态：%s\n' "$(redis_value bot_status)"
     printf 'Telegram 登录：%s\n' "$(redis_value tg_logged_in)"
     printf '转发目标：%s\n' "$(redis_value target_chat)"
+    flow_stats=$(redis_value listener_flow_stats)
+    printf '最近消息流：%s\n' "${flow_stats:-暂无}"
   else
     printf 'Redis：未运行\n'
   fi
@@ -157,4 +159,3 @@ case "$1" in
     die "未知命令：$1"
     ;;
 esac
-

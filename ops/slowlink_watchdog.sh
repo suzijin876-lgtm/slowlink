@@ -2,6 +2,7 @@
 set -eu
 
 APP_CONTAINER="${APP_CONTAINER:-slowlink_app}"
+REDIS_CONTAINER="${REDIS_CONTAINER:-slowlink_redis}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-20}"
 CPU_THRESHOLD="${CPU_THRESHOLD:-90}"
 HIGH_COUNT_LIMIT="${HIGH_COUNT_LIMIT:-4}"
@@ -22,11 +23,22 @@ container_cpu() {
   docker stats --no-stream --format '{{.CPUPerc}}' "$APP_CONTAINER" 2>/dev/null | tr -d '%' | awk '{printf "%.0f", $1}'
 }
 
+capture_python_state() {
+  reason=$1
+  log "python stack requested: $reason"
+  docker kill --signal=USR1 "$APP_CONTAINER" >> "$LOG_FILE" 2>&1 || true
+  sleep 1
+  flow="$(docker exec "$REDIS_CONTAINER" redis-cli --raw GET listener_flow_stats 2>/dev/null || true)"
+  log "listener flow: ${flow:-unavailable}"
+  docker top "$APP_CONTAINER" -eo pid,tid,ppid,comm,%cpu,%mem,etime >> "$LOG_FILE" 2>&1 || true
+  docker logs --tail 160 "$APP_CONTAINER" >> "$LOG_FILE" 2>&1 || true
+}
+
 snapshot() {
   log "snapshot: load=$(cut -d ' ' -f1-3 /proc/loadavg 2>/dev/null || true)"
   docker stats --no-stream "$APP_CONTAINER" >> "$LOG_FILE" 2>/dev/null || true
-  ps -eo pid,ppid,comm,%cpu,%mem,etime,args --sort=-%cpu | head -20 >> "$LOG_FILE" 2>/dev/null || true
-  docker logs --tail 80 "$APP_CONTAINER" >> "$LOG_FILE" 2>&1 || true
+  ps -eo pid,tid,ppid,comm,%cpu,%mem,etime --sort=-%cpu | head -20 >> "$LOG_FILE" 2>/dev/null || true
+  capture_python_state "sustained high CPU"
 }
 
 log "watchdog started: container=$APP_CONTAINER threshold=${CPU_THRESHOLD}% count=$HIGH_COUNT_LIMIT interval=${CHECK_INTERVAL}s cooldown=${COOLDOWN_SECONDS}s"
@@ -44,6 +56,9 @@ while true; do
   if [ "$cpu" -ge "$CPU_THRESHOLD" ]; then
     high_count=$((high_count + 1))
     log "high CPU: ${cpu}% (${high_count}/${HIGH_COUNT_LIMIT})"
+    if [ "$high_count" -eq 1 ]; then
+      capture_python_state "first high CPU sample"
+    fi
   else
     if [ "$high_count" -gt 0 ]; then
       log "CPU recovered: ${cpu}% (reset high count)"

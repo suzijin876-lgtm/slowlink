@@ -150,7 +150,8 @@ copy_release_files() {
 install_watchdog() {
   install -m 644 "$INSTALL_DIR/ops/slowlink-watchdog.service" "/etc/systemd/system/$WATCHDOG_SERVICE"
   systemctl daemon-reload
-  systemctl enable --now "$WATCHDOG_SERVICE" >/dev/null 2>&1 || die "CPU watchdog 启动失败"
+  systemctl enable "$WATCHDOG_SERVICE" >/dev/null 2>&1 || die "CPU watchdog 启用失败"
+  systemctl restart "$WATCHDOG_SERVICE" >/dev/null 2>&1 || die "CPU watchdog 启动失败"
 }
 
 wait_for_app_health() {
@@ -188,4 +189,3 @@ deploy_application() {
     die "slowlink_app 在 90 秒内未通过健康检查"
   fi
 }
-
