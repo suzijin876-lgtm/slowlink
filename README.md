@@ -34,6 +34,8 @@ sudo /opt/slowlink/manage.sh purge
 
 更新只重建 `slowlink_app`，不会停止 `slowlink_redis` 或主机上的其他服务，并保留 `.env`、`data`、Telegram Session、Redis 数据和用户配置。
 
+备份默认写入 `/var/backups/slowlink`。完整运维和故障诊断说明见 [docs/OPERATIONS.md](docs/OPERATIONS.md)。
+
 `uninstall` 保留配置与数据；`purge` 会要求输入 `PURGE` 后彻底删除 SlowLink 自有资源。
 
 ## 稳定性保护
@@ -50,4 +52,3 @@ sudo /opt/slowlink/manage.sh purge
 ## 安全说明
 
 公开仓库不包含 `.env`、密码、Token、Telegram Session、Redis 数据、数据库、日志或备份。不要手动将这些运行时文件加入 Git。
-
