@@ -1,4 +1,8 @@
+import hashlib
+import importlib.util
+import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -106,6 +110,74 @@ class DistributionSystemTests(unittest.TestCase):
             'GH_TOKEN:',
         ):
             self.assertIn(fragment, text)
+
+    def test_release_builder_creates_exact_verified_assets(self):
+        builder_path = ROOT / "scripts" / "build_release.py"
+        self.assertTrue(builder_path.is_file(), "missing scripts/build_release.py")
+
+        spec = importlib.util.spec_from_file_location("slowlink_build_release", builder_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        version = "1.38.73"
+        expected_names = (
+            "slowlink_app_v1_38_73.zip",
+            "slowlink_v1_38_73_full.zip",
+            "slowlink_v1_38_73_update_log.txt",
+            "SHA256SUMS.txt",
+        )
+        self.assertEqual(module.file_version(version), "1_38_73")
+        self.assertEqual(module.expected_asset_names(version), expected_names)
+        self.assertIn("## [1.38.73]", module.extract_changelog(version))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            assets = module.build(version, output_dir)
+            self.assertEqual(tuple(path.name for path in assets), expected_names)
+            self.assertEqual({path.name for path in output_dir.iterdir()}, set(expected_names))
+
+            app_zip, full_zip, update_log, checksum_file = assets
+            with zipfile.ZipFile(app_zip) as archive:
+                app_members = archive.namelist()
+            with zipfile.ZipFile(full_zip) as archive:
+                full_members = archive.namelist()
+
+            self.assertTrue(app_members)
+            self.assertTrue(all(name.startswith("app/") for name in app_members))
+            for required in (
+                "VERSION",
+                "Dockerfile",
+                "docker-compose.yml",
+                "install.sh",
+                "manage.sh",
+                "uninstall.sh",
+                "scripts/distribution_lib.sh",
+            ):
+                self.assertIn(required, full_members)
+
+            forbidden_parts = (
+                "/.env",
+                "/data/",
+                "/sessions/",
+                "/.git/",
+                "/backups/",
+                "/backup/",
+                "/__pycache__/",
+            )
+            for member in app_members + full_members:
+                normalized = f"/{member.lower()}"
+                self.assertFalse(any(part in normalized for part in forbidden_parts), member)
+                self.assertFalse(normalized.endswith((".session", ".sqlite", ".sqlite3", ".db", ".rdb", ".log")), member)
+
+            self.assertIn("## [1.38.73]", update_log.read_text(encoding="utf-8"))
+            checksum_lines = checksum_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(checksum_lines), 3)
+            for line in checksum_lines:
+                digest, name = line.split("  ", 1)
+                payload = (output_dir / name).read_bytes()
+                self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
 
     def test_repository_root_contains_no_historical_packages_or_runtime_data(self):
         version_dirs = [path.name for path in ROOT.iterdir() if path.is_dir() and path.name.startswith("V1.")]
