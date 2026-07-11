@@ -1,0 +1,725 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="toast" class="toast {% if msg %}show {{ msg_kind }}{% endif %}">{% if msg %}{{ msg }}{% endif %}</div>
+
+<nav class="slowlink-main-nav" aria-label="页面导航">
+  <a href="#runBoard">概览</a>
+  <a href="#accountBoard">账号</a>
+  <a href="#rulesBoard">规则</a>
+  <a href="#recordsBoard">记录</a>
+  <a href="#toolsBoard">维护</a>
+</nav>
+
+<section class="ui-board run-monitor-board unified-run-board" id="runBoard">
+  <div class="board-head unified-head">
+    <div>
+      <h2>运行与监控</h2>
+      <p class="hint no-margin">运行控制、监听状态、监听面板合并到一个板块。</p>
+    </div>
+  </div>
+
+  <section class="top-dashboard clean-dashboard v116-dashboard unified-dashboard">
+    <div class="mini-card"><div class="mini-label">Telegram</div><div class="mini-value" id="tgStatus">{{ '已登录' if tg_logged_in else '未登录' }}</div><div class="mini-sub" id="tgUser">{{ tg_current_user }}</div></div>
+    <div class="mini-card"><div class="mini-label">监听状态</div><div class="mini-value"><span class="pill {{ bot_status }}" id="botStatus">{{ bot_status }}</span></div><div class="mini-sub">启动/停止会自动更新</div></div>
+    <div class="mini-card heartbeat-card"><div class="mini-label">监听心跳</div><div class="mini-value heartbeat-value"><span id="heartbeatHealth" class="health {{ heartbeat.health_level if heartbeat else 'idle' }}">{{ heartbeat.health if heartbeat else '未运行' }}</span></div><div class="mini-sub"><span id="heartbeatTime">{{ heartbeat.time if heartbeat else '-' }}</span> · <span id="heartbeatAge">{{ heartbeat.age_text if heartbeat else '-' }}</span></div></div>
+    <div class="mini-card"><div class="mini-label">全部群/频道</div><div class="mini-value" id="statTotal">{{ dialog_stats.total }}</div><div class="mini-sub">刷新后统计</div></div>
+    <div class="mini-card"><div class="mini-label">正在监听</div><div class="mini-value ok" id="statListening">{{ dialog_stats.listening }}</div><div class="mini-sub">当前有效选择</div></div>
+    <div class="mini-card"><div class="mini-label">未监听 / 排除</div><div class="mini-value"><span id="statUnlistened">{{ dialog_stats.unlistened }}</span> / <span id="statExcluded">{{ dialog_stats.excluded }}</span></div><div class="mini-sub">取消的也能看见</div></div>
+    <div class="mini-card"><div class="mini-label">版本</div><div class="mini-value" id="appVersion">{{ app_version }}</div><div class="mini-sub">布局修正版</div></div>
+  </section>
+
+  <section class="run-monitor-card main-block unified-control-monitor">
+    <div class="control-strip">
+      <div>
+        <h2>运行控制</h2>
+        <p class="hint no-margin">常用开关放在这里，方便随时启动 / 停止监听。</p>
+      </div>
+      <div class="button-row control-actions">
+        <form action="/start_bot" method="post" data-ajax="1"><button>启动监听</button></form>
+        <form action="/stop_bot" method="post" data-ajax="1"><button class="warning">停止监听</button></form>
+      </div>
+    </div>
+
+    <div class="monitor-inline-block">
+      <div class="title-row compact-title monitor-head">
+        <div>
+          <h2>监听面板</h2>
+          <p class="hint no-margin">默认收起列表。取消掉的群会显示为未监听，不会直接消失。</p>
+        </div>
+        <div class="button-row monitor-head-actions">
+          <button type="button" class="secondary" id="monitorFoldBtn">展开监听列表</button>
+          <form action="/refresh_dialogs" method="post" data-ajax="1"><button>刷新全部群/频道</button></form>
+        </div>
+      </div>
+
+      <div class="monitor-summary-bar">
+        <span>全部：<b id="summaryTotal">{{ dialog_stats.total }}</b></span>
+        <span>正在监听：<b id="summaryListening">{{ dialog_stats.listening }}</b></span>
+        <span>未监听：<b id="summaryUnlistened">{{ dialog_stats.unlistened }}</b></span>
+        <span>已排除：<b id="summaryExcluded">{{ dialog_stats.excluded }}</b></span>
+        <span class="muted" id="visibleCount">列表已收起</span>
+      </div>
+
+      <div class="monitor-body collapsed" id="monitorBody">
+        <div class="monitor-toolbar">
+          <div class="monitor-tabs">
+            <button type="button" class="chip active" data-monitor-view="all">全部群/频道</button>
+            <button type="button" class="chip" data-monitor-view="active">正在监听</button>
+          </div>
+          <input id="dialogSearch" class="search compact-search" placeholder="搜索群名、频道名、@用户名、-100ID">
+        </div>
+
+        <div class="filter-row" id="dialogFilters">
+          <button type="button" class="filter-chip active" data-filter="all">全部</button>
+          <button type="button" class="filter-chip" data-filter="listening">已监听</button>
+          <button type="button" class="filter-chip" data-filter="unlistened">未监听</button>
+          <button type="button" class="filter-chip" data-filter="excluded">已排除</button>
+          <button type="button" class="filter-chip" data-filter="channel">频道</button>
+          <button type="button" class="filter-chip" data-filter="group">群组</button>
+        </div>
+
+        <form action="/save_monitor_panel" method="post" data-ajax="1" id="monitorForm">
+          <div class="panel-actions sticky-actions compact-actions">
+            <button type="button" onclick="toggleDialogs(true)">全选当前结果</button>
+            <button type="button" class="warning" onclick="toggleDialogs(false)">取消当前结果</button>
+            <button type="submit">保存监听选择</button>
+          </div>
+          <div class="dialog-list compact-dialog-list" id="dialogList">
+            {% if dialog_cache %}
+              {% for d in dialog_cache %}
+              <label class="dialog-row status-{{ d.status }}" data-status="{{ d.status }}" data-type="{{ d.type|lower }}" data-search="{{ (d.title ~ ' ' ~ d.username ~ ' ' ~ d.value ~ ' ' ~ d.type ~ ' ' ~ d.status_text)|lower }}">
+                <input type="checkbox" name="monitors" value="{{ d.value }}" {% if d.checked %}checked{% endif %}>
+                <div class="dialog-main">
+                  <div class="dialog-title-line"><b>{{ d.title }}</b> <span class="tag">{{ d.type }}</span> <span class="state-tag {{ d.status }}">{{ d.status_text }}</span></div>
+                  <div class="dialog-sub">{{ d.value }} {% if d.username %} / {{ d.username }}{% endif %}</div>
+                </div>
+              </label>
+              {% endfor %}
+            {% else %}
+              <div class="empty">还没有会话缓存。先点“刷新全部群/频道”。</div>
+            {% endif %}
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+</section>
+
+<section class="ui-board grouped-board account-board" data-active="account" id="accountBoard">
+  <div class="board-head"><div><h2>账号与转发</h2><p class="hint no-margin">账号、转发目标、监听范围集中到这一块。</p></div></div>
+  <div class="tab-shell grouped-tabs" data-tabs="accounting">
+    <div class="tab-nav">
+      <button type="button" class="tab-btn active" data-tab="account">Telegram 账号</button>
+      <button type="button" class="tab-btn" data-tab="target">转发目标</button>
+      <button type="button" class="tab-btn" data-tab="listen">监听 / 排除</button>
+    </div>
+    <div class="tab-content">
+      <div class="tab-panel active" data-panel="account">
+        <h3>Telegram 账号</h3>
+        <form action="/save_api" method="post" class="stack" data-ajax="1">
+          <input name="api_id" value="{{ tg_api_id }}" placeholder="API ID，例如 123456">
+          <input name="api_hash" value="{{ tg_api_hash }}" placeholder="API HASH">
+          <input name="phone" value="{{ tg_phone }}" placeholder="手机号，带区号，例如 +86xxxxxxxxxxx">
+          <button>保存配置</button>
+        </form>
+        <div class="button-row"><form action="/send_code" method="post" data-ajax="1"><button>发送验证码</button></form></div>
+        <form action="/sign_in" method="post" class="stack" data-ajax="1">
+          <input name="code" placeholder="验证码，只填数字">
+          <input name="password" type="password" placeholder="二步验证密码，没有就留空">
+          <button>提交验证码登录</button>
+        </form>
+        <form action="/tg_logout" method="post" class="danger-zone" data-ajax="1"><button class="danger">退出当前 Telegram 账号</button></form>
+      </div>
+      <div class="tab-panel" data-panel="target">
+        <h3>转发目标</h3>
+        <form action="/set_target" method="post" class="row" data-ajax="1" data-keep-input="1"><input id="targetChatInput" name="value" value="{{ target_chat }}" placeholder="@username 或 -100ID；多个目标用逗号隔开"><button>保存</button></form>
+        <form action="/test_send" method="post" data-ajax="1"><button>测试发送到目标</button></form>
+        <p class="hint">支持 @username、username、-100ID。</p>
+      </div>
+      <div class="tab-panel" data-panel="listen">
+        <h3>监听 / 排除</h3>
+        <div class="two-col">
+          <div>
+            <h4>手动监听</h4>
+            <form action="/add_monitor" method="post" class="row" data-ajax="1"><input name="value" placeholder="@username 或 -100ID"><button>添加</button></form>
+            <form action="/test_source" method="post" class="row" data-ajax="1"><input name="value" placeholder="输入要测试的监听源"><button>测试</button></form>
+            <div class="collapse-box open-lite"><div class="summary-lite">当前监听列表：<span id="monitorCount">{{ monitor_chats|length }}</span> 个</div><div class="compact-list" id="monitorList"></div></div>
+          </div>
+          <div>
+            <h4>排除群/频道</h4>
+            <form action="/add_exclude" method="post" class="row" data-ajax="1"><input name="value" placeholder="@username 或 -100ID"><button>添加</button></form>
+            <div class="collapse-box open-lite"><div class="summary-lite">当前排除列表：<span id="excludeCount">{{ exclude_chats|length }}</span> 个</div><div class="compact-list" id="excludeList"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="ui-board grouped-board rules-board" data-active="rules" id="rulesBoard">
+  <div class="board-head"><div><h2>规则与去重</h2><p class="hint no-margin">正则决定是否转发，码识别只辅助去重，去重策略放在同一块。</p></div></div>
+  <div class="tab-shell grouped-tabs" data-tabs="ruleset">
+    <div class="tab-nav">
+      <button type="button" class="tab-btn active" data-tab="rules">正则规则</button>
+      <button type="button" class="tab-btn" data-tab="codes">码识别</button>
+      <button type="button" class="tab-btn" data-tab="dedup">去重设置</button>
+    </div>
+    <div class="tab-content">
+      <div class="tab-panel active" data-panel="rules">
+        <h3>正则规则</h3>
+        <form action="/add_regex" method="post" class="row" data-ajax="1"><input name="value" placeholder="可以粘贴单条规则，也可以用 ;; 批量分隔"><button>添加</button></form>
+        <p class="hint">轻量过滤，排除群优先；码格式不要写死在正则里，可到“码识别”里配置。</p>
+        <div class="collapse-box open-lite"><div class="summary-lite">当前正则规则：<span id="regexCount">{{ regex_rules|length }}</span> 条</div><div class="compact-list rule-list" id="regexList"></div></div>
+      </div>
+      <div class="tab-panel" data-panel="codes">
+        <h3>码识别</h3>
+        <div class="code-safe-hero">
+          <div>
+            <b>安全模式已开启</b>
+            <p>码识别只做一件事：在你的正则 / 关键词已经命中后，提取完整码用于去重和加速。默认不会单独触发转发。</p>
+          </div>
+          <div class="safe-pill">仅辅助去重</div>
+        </div>
+        <div class="code-safe-grid">
+          <div>✓ Register / Renew 完整码</div>
+          <div>✓ 邀请码 / 注册码字段</div>
+          <div>✓ 注册链接 code 参数</div>
+          <div>✓ 同一个完整码跨群只发一次</div>
+        </div>
+        <details class="advanced-box code-advanced">
+          <summary>高级码规则设置</summary>
+          <p class="hint">看不懂可以不动。这里只给以后新增特殊码格式用；转不转发仍然主要看“正则规则”。</p>
+          <form action="/add_code_rule" method="post" class="code-rule-form" data-ajax="1">
+            <input name="name" placeholder="规则名称，例如 VIP 邀请码">
+            <input name="pattern" placeholder="识别正则，例如 VIP-[A-Za-z0-9-]+">
+            <input name="group" value="0" placeholder="提取组，默认 0">
+            <label class="inline-check"><input type="checkbox" name="fast" value="1" checked> 极速通道</label>
+            <label class="inline-check"><input type="checkbox" name="strict_context" value="1" checked> 检查注册/邀请上下文</label>
+            <label class="inline-check danger-inline"><input type="checkbox" name="trigger" value="1"> 允许这条码规则单独触发转发</label>
+            <button>添加码规则</button>
+          </form>
+          <div class="button-row compact-actions"><form action="/reset_code_rules" method="post" data-ajax="1"><button class="secondary small">恢复默认码规则</button></form></div>
+          <div class="collapse-box open-lite"><div class="summary-lite">当前码识别规则：<span id="codeRuleCount">{{ code_rules|length }}</span> 条</div><div class="compact-list code-rule-list" id="codeRuleList"></div></div>
+        </details>
+      </div>
+      <div class="tab-panel" data-panel="dedup">
+        <h3>去重设置</h3>
+        <form action="/save_dedup" method="post" class="stack dedup-form" data-ajax="1">
+          <label><input type="checkbox" name="enabled" value="1" {% if dedup_enabled %}checked{% endif %}> 启用去重</label>
+          <label>去重模式
+            <select name="mode">
+              <option value="strict" {% if dedup_mode=='strict' %}selected{% endif %}>严格：拦截更强</option>
+              <option value="balanced" {% if dedup_mode=='balanced' %}selected{% endif %}>平衡</option>
+              <option value="loose" {% if dedup_mode=='loose' %}selected{% endif %}>宽松：误杀更少</option>
+            </select>
+          </label>
+          {% set opts = [('0','不去重'),('5','5分钟'),('10','10分钟'),('15','15分钟'),('20','20分钟'),('30','30分钟'),('60','1小时'),('180','3小时'),('360','6小时'),('720','12小时'),('1440','1天'),('4320','3天'),('10080','7天'),('20160','14天')] %}
+          <div class="dedup-grid">
+            <label>注册 / 开注<select name="dedup_register_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_register_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+            <label>邀请码 / 注册码<select name="dedup_invite_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_invite_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+            <label>完整码重复<select name="dedup_code_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_code_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+            <label>普通抽奖<select name="dedup_lottery_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_lottery_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+            <label>联合抽奖<select name="dedup_joint_lottery_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_joint_lottery_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+            <label>抽奖唯一字段
+              <select name="dedup_lottery_key_mode">
+                <option value="id" {% if dedup_lottery_key_mode=='id' %}selected{% endif %}>按抽奖 ID 去重（默认，防刷屏）</option>
+                <option value="id_keyword" {% if dedup_lottery_key_mode=='id_keyword' %}selected{% endif %}>按 抽奖 ID + 参与关键词 去重</option>
+                <option value="id_prize_keyword" {% if dedup_lottery_key_mode=='id_prize_keyword' %}selected{% endif %}>按 抽奖 ID + 奖品 + 参与关键词 去重</option>
+              </select>
+            </label>
+            <label>长期活动<select name="dedup_long_term_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_long_term_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+            <label>其它类型<select name="dedup_other_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_other_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
+          </div>
+          <p class="hint">抽奖类默认不再使用“高度相似”去重。有抽奖 ID 时按上面的“抽奖唯一字段”生成 key；没有 ID 时才用参与关键词、奖品、简介、创建者兜底。</p>
+          <button>保存去重策略</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="ui-board grouped-board tools-board low-frequency-board" data-active="debug" id="toolsBoard">
+  <div class="board-head"><div><h2>工具与备份</h2><p class="hint no-margin">测试、检查、导入导出放在一起，平时不用就不用打开。</p></div></div>
+  <div class="tab-shell grouped-tabs" data-tabs="tools">
+    <div class="tab-nav">
+      <button type="button" class="tab-btn active" data-tab="debug">调试工具</button>
+      <button type="button" class="tab-btn" data-tab="backup">备份恢复</button>
+    </div>
+    <div class="tab-content">
+      <div class="tab-panel active" data-panel="debug">
+        <h3>调试工具</h3>
+        <div class="two-col">
+          <div><h4>正则测试器</h4><form action="/regex_test" method="post" class="stack" data-ajax="1" data-result="regex"><textarea name="text" rows="5" placeholder="把要测试的消息粘贴到这里"></textarea><button>测试正则 / 分类 / 去重指纹</button></form></div>
+          <div><h4>启动自检</h4><form action="/precheck" method="post" data-ajax="1" data-result="precheck"><button>执行启动自检</button></form><p class="hint">检查 Telegram 登录、目标、监听列表、正则、Redis。</p></div>
+        </div>
+        <div id="debugResult"></div>
+      </div>
+      <div class="tab-panel" data-panel="backup">
+        <h3>备份恢复</h3>
+        <div class="two-col">
+          <div class="backup-box"><h4>导出</h4><p class="hint">点击后直接下载 JSON 备份文件。</p><a class="button-link" href="/export_config">下载配置备份</a></div>
+          <div class="backup-box"><h4>导入</h4><form action="/import_config" method="post" enctype="multipart/form-data" class="stack" data-ajax="1"><input type="file" name="backup_file" accept="application/json,.json"><label>导入方式<select name="mode"><option value="overwrite">覆盖当前配置</option><option value="merge">合并到当前配置</option><option value="rules_only">只导入监听 / 排除 / 正则</option></select></label><button class="warning">导入备份文件</button></form></div>
+        </div>
+        <p class="hint">备份包含监听、排除、正则、转发目标、去重设置；不包含后台密码、API_HASH、Telegram session、去重缓存。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="ui-board grouped-board records-cache-board" id="recordsBoard">
+  <div class="board-head"><div><h2>记录与缓存</h2><p class="hint no-margin">缓存管理在上，记录中心在下；只保留安全清理按钮。</p></div></div>
+  <div class="section-stack">
+    <div class="sub-panel cache-subpanel">
+      <div class="tab-panel active" data-panel="cache">
+        <h3>缓存管理</h3>
+        <p class="hint">这里只保留安全按钮，不提供“一键清全部”。不会删除 Telegram 登录、后台密码、API 配置、监听/排除、正则和转发目标。</p>
+        <div class="cache-grid" id="cacheStats">
+          <div class="cache-stat"><span>系统数据条目</span><b id="cacheRedisKeys">{{ cache_stats.redis_keys }}</b></div>
+          <div class="cache-stat"><span>显示记录</span><b id="cacheRecordLogs">{{ cache_stats.record_logs }}</b></div>
+          <div class="cache-stat"><span>防重复缓存</span><b id="cacheDedupCache">{{ cache_stats.dedup_cache }}</b></div>
+          <div class="cache-stat"><span>会话缓存</span><b id="cacheDialogCache">{{ cache_stats.dialog_cache }}</b></div>
+          <div class="cache-stat"><span>临时缓存</span><b id="cacheTempCache">{{ cache_stats.temp_cache }}</b></div>
+        </div>
+        <div class="cache-actions safe-cache-actions">
+          <form action="/clear_cache" method="post" data-ajax="1"><input type="hidden" name="kind" value="records"><button class="secondary">清空页面记录</button></form>
+          <form action="/clear_cache" method="post" data-ajax="1"><input type="hidden" name="kind" value="dedup_records"><button class="secondary">清空去重显示记录</button></form>
+          <form action="/clear_cache" method="post" data-ajax="1"><input type="hidden" name="kind" value="dialogs"><button class="secondary">清空会话缓存</button></form>
+          <form action="/clear_cache" method="post" data-ajax="1"><input type="hidden" name="kind" value="runtime"><button class="secondary">清空临时缓存</button></form>
+        </div>
+        <div class="notice-box">
+          <b>说明：</b>“系统数据条目”只是 Redis 里的配置、记录和缓存总数，不需要设置。
+          “防重复缓存”是正在生效的防重复 TTL key，用来挡同码、同抽奖、同注册链接等重复转发，会自动过期。
+        </div>
+        <details class="danger-zone">
+          <summary>高级操作：清空防重复缓存</summary>
+          <p class="hint">清空后，去重时间内已经发过的码、抽奖、注册链接、注册状态再次出现时，可能会重新转发。只在你确定要重置防重复状态时使用。</p>
+          <form action="/clear_cache" method="post" data-ajax="1" class="inline-form">
+            <input type="hidden" name="kind" value="dedup_cache">
+            <input name="confirm_code" placeholder="输入 CLEAR 确认" autocomplete="off">
+            <button class="warning">清空防重复缓存</button>
+          </form>
+        </details>
+      </div>
+    </div>
+    <div class="sub-panel records-subpanel">
+      <h3>记录中心</h3>
+      <p class="hint">自动刷新；每个分类右上角清自己的记录。</p>
+      <div class="tab-shell records-tab-shell inner-record-tabs" data-tabs="records">
+  <div class="tab-nav compact-tabs">
+    <button type="button" class="tab-btn active" data-tab="hits">命中记录</button>
+    <button type="button" class="tab-btn" data-tab="dedups">去重记录</button>
+    <button type="button" class="tab-btn" data-tab="fails">失败记录</button>
+    <button type="button" class="tab-btn" data-tab="perf">性能诊断</button>
+    <button type="button" class="tab-btn" data-tab="events">系统事件</button>
+  </div>
+  <div class="tab-content">
+    <div class="tab-panel active" data-panel="hits"><div class="panel-headline"><b>命中记录</b><form action="/clear_logs" method="post" data-ajax="1"><input type="hidden" name="kind" value="hits"><button class="small secondary">清空命中记录</button></form></div><div class="logbox big-logbox" id="hitsBox"></div></div>
+    <div class="tab-panel" data-panel="dedups"><div class="panel-headline"><span><b>去重记录</b><em>只清页面记录，不影响真正的防重复缓存。</em></span><form action="/clear_logs" method="post" data-ajax="1"><input type="hidden" name="kind" value="dedup_recent"><button class="small secondary">清空去重记录</button></form></div><p class="hint">点“解除去重”后，同活动下一次命中可重新转发。</p><div class="logbox big-logbox" id="dedupBox"></div></div>
+    <div class="tab-panel" data-panel="fails"><div class="panel-headline"><b>失败 / 慢转发记录</b><form action="/clear_logs" method="post" data-ajax="1"><input type="hidden" name="kind" value="fails"><button class="small secondary">清空失败记录</button></form></div><div class="logbox big-logbox" id="failsBox"></div></div>
+    <div class="tab-panel" data-panel="perf"><div class="panel-headline"><span><b>性能诊断</b><em>只记录命中后的关键耗时，不记录未命中消息。</em></span><form action="/clear_logs" method="post" data-ajax="1"><input type="hidden" name="kind" value="perf_events"><button class="small secondary">清空性能诊断</button></form></div><div class="logbox big-logbox" id="perfBox"></div></div>
+    <div class="tab-panel" data-panel="events"><div class="panel-headline"><b>系统事件</b><form action="/clear_logs" method="post" data-ajax="1"><input type="hidden" name="kind" value="events"><button class="small secondary">清空系统事件</button></form></div><div class="logbox big-logbox" id="eventsBox"></div></div>
+  </div>
+</div>
+    </div>
+  </div>
+</section>
+
+<script>
+let currentDialogs = {{ dialog_cache|tojson }};
+let currentMonitorView = 'all';
+let currentFilter = 'all';
+let currentSearch = '';
+let pollingBusy = false;
+let pollTimer = null;
+let stateAbort = null;
+let stateRequestSeq = 0;
+const POLL_INTERVAL_MS = 5000;
+
+function isPageHidden(){
+  return document.hidden || document.visibilityState === 'hidden';
+}
+
+function clearPollTimer(){
+  if(pollTimer){
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function stopPolling(){
+  clearPollTimer();
+  stateRequestSeq += 1;
+  if(stateAbort){
+    stateAbort.abort();
+    stateAbort = null;
+  }
+  pollingBusy = false;
+}
+
+function scheduleNextPoll(){
+  clearPollTimer();
+  if(isPageHidden()) return;
+  pollTimer = window.setTimeout(() => {
+    pollTimer = null;
+    requestLightState('poll');
+  }, POLL_INTERVAL_MS);
+}
+
+function startPolling(){
+  if(isPageHidden() || pollingBusy || pollTimer) return;
+  scheduleNextPoll();
+}
+
+async function requestState(full=false, reason='poll'){
+  if(!full && isPageHidden()) return;
+  if(!full && pollingBusy) return;
+  if(full){
+    if(stateAbort) stateAbort.abort();
+    clearPollTimer();
+  }
+  const requestId = ++stateRequestSeq;
+  const controller = new AbortController();
+  stateAbort = controller;
+  pollingBusy = true;
+  const url = '/api/state' + (full ? '' : '?light=1');
+  try{
+    const res = await fetch(url, {headers:{'Accept':'application/json'}, signal: controller.signal});
+    if(requestId !== stateRequestSeq) return;
+    if(!res.ok) return;
+    const data = await res.json();
+    if(requestId !== stateRequestSeq) return;
+    updateStatus(data);
+    updateCacheStats(data.cache_stats);
+    renderLogs(data);
+    if(full){
+      if(data.dialog_cache) renderDialogs(data.dialog_cache);
+      renderLists(data);
+    }
+  }catch(e){
+    if(!e || e.name !== 'AbortError'){
+      console.error('SlowLink state request failed:', reason, e);
+    }
+  }finally{
+    if(requestId === stateRequestSeq){
+      pollingBusy = false;
+      if(stateAbort === controller) stateAbort = null;
+      if(isPageHidden()){
+        clearPollTimer();
+      }else{
+        scheduleNextPoll();
+      }
+    }
+  }
+}
+
+function requestLightState(reason='poll'){
+  return requestState(false, reason);
+}
+
+function requestFullState(reason='manual'){
+  return requestState(true, reason);
+}
+
+function handleVisibilityChange(){
+  if(isPageHidden()){
+    stopPolling();
+    return;
+  }
+  startPolling();
+  requestLightState('visible-resume');
+}
+
+function esc(s){return String(s ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function toast(message, kind='success'){
+  const el = document.getElementById('toast');
+  el.textContent = message || '';
+  el.className = 'toast show ' + kind;
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(()=>{ el.className='toast'; }, 2600);
+}
+
+function updateStatus(data){
+  if(!data) return;
+  const av = document.getElementById('appVersion');
+  if(av && data.app_version) av.textContent = data.app_version;
+  document.getElementById('tgStatus').textContent = data.tg_logged_in ? '已登录' : '未登录';
+  document.getElementById('tgUser').textContent = data.tg_current_user || '未登录';
+  const bs = document.getElementById('botStatus');
+  bs.textContent = data.bot_status || 'stopped';
+  bs.className = 'pill ' + (data.bot_status || 'stopped');
+  const hb = data.heartbeat || {};
+  const hh = document.getElementById('heartbeatHealth');
+  const ht = document.getElementById('heartbeatTime');
+  const ha = document.getElementById('heartbeatAge');
+  if(hh){ hh.textContent = hb.health || '未运行'; hh.className = 'health ' + (hb.health_level || 'idle'); }
+  if(ht) ht.textContent = hb.time || '-';
+  if(ha) ha.textContent = hb.age_text || '-';
+  const targetInput = document.getElementById('targetChatInput');
+  if(targetInput && typeof data.target_chat !== 'undefined' && document.activeElement !== targetInput){
+    targetInput.value = data.target_chat || '';
+  }
+  if(data.stats){
+    const st = data.stats || {};
+    document.getElementById('statTotal').textContent = st.total ?? 0;
+    document.getElementById('statListening').textContent = st.listening ?? 0;
+    document.getElementById('statUnlistened').textContent = st.unlistened ?? 0;
+    document.getElementById('statExcluded').textContent = st.excluded ?? 0;
+    const smap = {summaryTotal: st.total ?? 0, summaryListening: st.listening ?? 0, summaryUnlistened: st.unlistened ?? 0, summaryExcluded: st.excluded ?? 0};
+    Object.entries(smap).forEach(([id,val]) => { const el=document.getElementById(id); if(el) el.textContent = val; });
+  }
+}
+
+function updateCacheStats(stats){
+  if(!stats) return;
+  const map = {
+    cacheRedisKeys: stats.redis_keys,
+    cacheRecordLogs: stats.record_logs,
+    cacheDedupCache: stats.dedup_cache,
+    cacheDialogCache: stats.dialog_cache,
+    cacheTempCache: stats.temp_cache
+  };
+  Object.entries(map).forEach(([id,val]) => { const el=document.getElementById(id); if(el) el.textContent = val ?? 0; });
+}
+
+function rowMatches(d){
+  const type = String(d.type || '').toLowerCase();
+  const status = d.status || (d.excluded ? 'excluded' : (d.checked ? 'listening' : 'unlistened'));
+  if(currentMonitorView === 'active' && !d.checked) return false;
+  if(currentFilter !== 'all'){
+    if(['listening','unlistened','excluded'].includes(currentFilter) && status !== currentFilter) return false;
+    if(currentFilter === 'channel' && !type.includes('频道') && !type.includes('channel')) return false;
+    if(currentFilter === 'group' && !type.includes('群') && !type.includes('group')) return false;
+  }
+  if(currentSearch){
+    const hay = `${d.title||''} ${d.username||''} ${d.value||''} ${d.type||''} ${d.status_text||''}`.toLowerCase();
+    if(!hay.includes(currentSearch)) return false;
+  }
+  return true;
+}
+function renderDialogs(dialogs){
+  if(dialogs) currentDialogs = dialogs;
+  const box = document.getElementById('dialogList');
+  if(!box) return;
+  if(!currentDialogs || currentDialogs.length === 0){ box.innerHTML = '<div class="empty">还没有会话缓存。先点“刷新全部群/频道”。</div>'; return; }
+  let visible = 0;
+  const html = currentDialogs.map(d => {
+    const status = d.status || (d.excluded ? 'excluded' : (d.checked ? 'listening' : 'unlistened'));
+    const show = rowMatches({...d, status});
+    if(show) visible++;
+    const checked = d.checked ? 'checked' : '';
+    return `<label class="dialog-row status-${esc(status)}" style="${show?'':'display:none'}" data-status="${esc(status)}">
+      <input type="checkbox" name="monitors" value="${esc(d.value||'')}" ${checked}>
+      <div class="dialog-main"><div class="dialog-title-line"><b>${esc(d.title||'未命名')}</b> <span class="tag">${esc(d.type||'')}</span> <span class="state-tag ${esc(status)}">${esc(d.status_text || (d.checked?'正在监听':'未监听'))}</span></div><div class="dialog-sub">${esc(d.value||'')}${d.username ? ' / '+esc(d.username) : ''}</div></div>
+    </label>`;
+  }).join('');
+  box.innerHTML = html || '<div class="empty">当前筛选没有结果</div>';
+  const vc = document.getElementById('visibleCount');
+  if(vc){
+    const body = document.getElementById('monitorBody');
+    vc.textContent = body && body.classList.contains('collapsed') ? '列表已收起' : `当前显示 ${visible} 个`;
+  }
+}
+function toggleDialogs(checked){
+  document.querySelectorAll('#dialogList .dialog-row').forEach(row => {
+    if(row.style.display !== 'none'){
+      const cb = row.querySelector('input[type="checkbox"]');
+      if(cb) cb.checked = checked;
+    }
+  });
+}
+
+function renderSetList(boxId, countId, items, endpoint){
+  const box = document.getElementById(boxId); const count = document.getElementById(countId);
+  if(count) count.textContent = items ? items.length : 0;
+  if(!box) return;
+  if(!items || items.length === 0){ box.innerHTML = '<div class="empty">暂无</div>'; return; }
+  box.innerHTML = items.map(item => `<div class="item"><span>${esc(item)}</span><form action="${endpoint}" method="post" data-ajax="1"><input type="hidden" name="value" value="${esc(item)}"><button class="danger small">删除</button></form></div>`).join('');
+}
+function renderCodeRules(items){
+  const box = document.getElementById('codeRuleList');
+  const count = document.getElementById('codeRuleCount');
+  if(count) count.textContent = items ? items.length : 0;
+  if(!box) return;
+  if(!items || items.length === 0){ box.innerHTML = '<div class="empty">暂无码规则</div>'; return; }
+  box.innerHTML = items.map((r, idx) => {
+    const index = esc(r.index ?? idx);
+    return `<details class="code-rule-card" ${r.ok===false?'open':''}>
+      <summary><span><b>${esc(r.name||'未命名')}</b> ${r.ok===false?'<span class="state-tag excluded">异常</span>':'<span class="state-tag listening">启用</span>'} ${r.trigger?'<span class="state-tag excluded">可触发</span>':'<span class="tag">仅辅助</span>'}</span><small>${esc(r.safe_reason||r.note||'')}</small></summary>
+      <form action="/update_code_rule" method="post" data-ajax="1" class="code-rule-edit">
+        <input type="hidden" name="index" value="${index}">
+        <label>名称<input name="name" value="${esc(r.name||'')}"></label>
+        <label>识别正则<input name="pattern" value="${esc(r.pattern||'')}"></label>
+        <label>提取组<input name="group" value="${esc(r.group ?? '0')}"></label>
+        <label class="inline-check"><input type="checkbox" name="enabled" value="1" ${r.enabled!==false?'checked':''}> 启用</label>
+        <label class="inline-check"><input type="checkbox" name="fast" value="1" ${r.fast?'checked':''}> 极速通道</label>
+        <label class="inline-check"><input type="checkbox" name="strict_context" value="1" ${r.strict_context?'checked':''}> 检查注册/邀请上下文</label>
+        <label class="inline-check danger-inline"><input type="checkbox" name="trigger" value="1" ${r.trigger?'checked':''}> 允许单独触发转发</label>
+        <label class="code-note">备注<input name="note" value="${esc(r.note||'')}"></label>
+        ${r.error?'<div class="error-text">错误：'+esc(r.error)+'</div>':''}
+        <div class="button-row"><button class="small">保存这条</button><button type="submit" formaction="/del_code_rule" class="danger small">删除</button></div>
+      </form>
+    </details>`;
+  }).join('');
+}
+
+function renderLists(data){
+  renderSetList('monitorList','monitorCount',data.monitor_chats || [],'/del_monitor');
+  renderSetList('excludeList','excludeCount',data.exclude_chats || [],'/del_exclude');
+  renderSetList('regexList','regexCount',data.regex_rules || [],'/del_regex');
+  renderCodeRules(data.code_rules || []);
+  bindAjaxForms();
+}
+
+function renderLogs(data){
+  if(!data) return;
+  const hasHits = Object.prototype.hasOwnProperty.call(data, 'hits');
+  const hasFails = Object.prototype.hasOwnProperty.call(data, 'fails');
+  const hasEvents = Object.prototype.hasOwnProperty.call(data, 'events');
+  const hasDedups = Object.prototype.hasOwnProperty.call(data, 'dedup_recent');
+  const hasPerfEvents = Object.prototype.hasOwnProperty.call(data, 'perf_events');
+  const hits = data.hits || [], fails = data.fails || [], events = data.events || [], dedups = data.dedup_recent || [];
+  const perfEvents = data.perf_events || [];
+  if(hasHits){
+    document.getElementById('hitsBox').innerHTML = hits.length ? hits.map(h => {
+      const p = h.perf || {};
+      const timeLine = (h.message_time || h.receive_time || h.send_time) ? '<br><span class="muted">时间链路：原消息 '+esc(h.message_time || p.message_time || '-')+' / 慢链接收 '+esc(h.receive_time || p.receive_time || '-')+' / 发送 '+esc(h.send_time || p.send_time || '-')+' / Telegram延迟 '+esc(h.telegram_delay_sec ?? p.telegram_delay_sec ?? '-')+'s</span>' : '';
+      const perfLine = h.perf ? '<br><span class="muted">内部耗时：queue '+esc(p.queue_wait_ms ?? '-')+'ms / match '+esc(p.match_ms ?? '-')+'ms / dedup '+esc(p.pre_dedup_ms ?? p.dedup_ms ?? '-')+'ms / send_start '+esc(p.before_send_ms ?? '-')+'ms / total '+esc(p.total_ms ?? '-')+'ms</span>' : '';
+      return `<div class="log"><b>${esc(h.time)}</b> | ${esc(h.status)} | ${esc(h.source)} | 规则：${esc(h.rule)}${timeLine}${perfLine} ${h.link?'<br><a href="'+esc(h.link)+'" target="_blank">'+esc(h.link)+'</a>':''}</div>`;
+    }).join('') : '<div class="empty">暂无命中记录</div>';
+  }
+  if(hasFails){
+    document.getElementById('failsBox').innerHTML = fails.length ? fails.map(f => `<div class="log error-text"><b>${esc(f.time)}</b> | ${esc(f.stage)} | ${esc(f.error)}</div>`).join('') : '<div class="empty">暂无失败记录</div>';
+  }
+  if(hasEvents){
+    document.getElementById('eventsBox').innerHTML = events.length ? events.map(e => `<div class="log"><b>${esc(e.time)}</b> | ${esc(e.kind)} | ${esc(e.message)}</div>`).join('') : '<div class="empty">暂无系统事件</div>';
+  }
+  if(hasDedups){
+    document.getElementById('dedupBox').innerHTML = dedups.length ? dedups.map(d => `<div class="log"><b>${esc(d.time)}</b> | ${esc(d.action)} | ${esc(d.activity)} | ${esc(d.reason)}${d.first_source?'<br>首次来源：'+esc(d.first_source):''}${d.source?'<br>本次来源：'+esc(d.source):''}${d.duplicate_count?'<br>重复次数：'+esc(d.duplicate_count):''}${d.duplicate_sources?'<br>重复来源：'+esc(d.duplicate_sources.join('，')):''}${d.ttl_left?'<br>剩余：'+esc(d.ttl_left)+' 秒':''}${d.core?'<br><span class="muted">'+esc(d.core)+'</span>':''}${d.link?'<br><a href="'+esc(d.link)+'" target="_blank">'+esc(d.link)+'</a>':''}${d.active?`<form action="/release_dedup" method="post" data-ajax="1" style="margin-top:8px;"><input type="hidden" name="dedup_id" value="${esc(d.dedup_id)}"><button class="small warning">解除去重</button></form>`:''}</div>`).join('') : '<div class="empty">暂无去重记录</div>';
+  }
+  const perfBox = document.getElementById('perfBox');
+  if(hasPerfEvents && perfBox){
+    const resultText = {sent:'已转发', duplicate:'重复跳过', duplicate_code:'邀请码重复', send_failed:'发送失败'};
+    perfBox.innerHTML = perfEvents.length ? perfEvents.map(p => {
+      const label = resultText[p.result] || p.result || '-';
+      const slow = p.slow ? ' slow' : '';
+      const rowClass = p.slow ? ' slow-row' : '';
+      const badges = `<div class="perf-badges"><span class="perf-badge${slow}">${p.slow?'慢':'正常'}</span><span class="perf-badge">total ${esc(p.total_ms ?? '-')}ms</span><span class="perf-badge">queue ${esc(p.queue_wait_ms ?? '-')}ms</span><span class="perf-badge">match ${esc(p.match_ms ?? '-')}ms</span><span class="perf-badge">dedup ${esc(p.pre_dedup_ms ?? '-')}ms</span><span class="perf-badge">send_start ${esc(p.before_send_ms ?? '-')}ms</span></div>`;
+      const timeLine = `<br><span class="muted">原消息 ${esc(p.message_time || '-')} / 接收 ${esc(p.receive_time || '-')} / 处理 ${esc(p.process_time || '-')} / 发送 ${esc(p.send_time || '-')} / Telegram延迟 ${esc(p.telegram_delay_sec ?? '-')}s</span>`;
+      return `<div class="log perf-log${rowClass}"><b>${esc(p.time)}</b> | ${esc(label)} | ${esc(p.source)} | 规则：${esc(p.rule || '-')}${badges}${timeLine}${p.link?'<br><a href="'+esc(p.link)+'" target="_blank">'+esc(p.link)+'</a>':''}</div>`;
+    }).join('') : '<div class="empty">暂无性能诊断</div>';
+  }
+  bindAjaxForms();
+}
+function renderRegexResult(r){
+  if(!r) return;
+  const box = document.getElementById('debugResult');
+  box.innerHTML = `<div class="debug-result ${r.matched?'ok-box':'warn-box'}"><div><b>命中：</b>${r.matched?'是':'否'}${r.usage_notice?' / 已被使用通知过滤':''}${r.closed_register_notice?' / 已关闭注册过滤':''}</div>${r.rule?'<div><b>命中规则：</b><code>'+esc(r.rule)+'</code></div>':''}${r.candidate?'<div><b>命中文本：</b>'+esc(r.candidate)+'</div>':''}${r.code_note?'<div><b>码识别：</b>'+esc(r.code_rule||'已识别')+' / '+esc(r.code_note)+'</div>':''}<div><b>活动类型：</b>${esc(r.activity)}　<b>去重时间：</b>${r.ttl_minutes==0?'不去重':esc(r.ttl_minutes)+' 分钟'}</div>${r.code_identity?'<div><b>完整码身份：</b><code>'+esc(r.code_identity)+'</code></div>':''}${r.lottery_identity?'<div><b>抽奖唯一字段：</b><code>'+esc(r.lottery_identity)+'</code></div><div><b>抽奖去重模式：</b>'+esc(r.lottery_mode||'id')+'</div>':''}<div><b>去重 ID：</b><code>${esc(r.dedup_id)}</code></div><details class="inner-details"><summary>查看清理结果</summary><div class="code-block"><b>原文本</b><pre>${esc(r.original)}</pre></div><div class="code-block"><b>清理文本</b><pre>${esc(r.normalized)}</pre></div><div class="code-block"><b>紧凑文本</b><pre>${esc(r.compact)}</pre></div><div class="code-block"><b>核心文本</b><pre>${esc(r.core)}</pre></div></details></div>`;
+}
+function renderPrecheckResult(r){
+  if(!r) return;
+  const box = document.getElementById('debugResult');
+  box.innerHTML = `<div class="debug-result ${r.ok?'ok-box':'warn-box'}">${(r.checks||[]).map(c => `<div>${c.ok?'✅':'❌'} <b>${esc(c.name)}</b>：${esc(c.detail)}</div>`).join('')}</div>`;
+}
+
+async function loadState(full=false){
+  return requestState(full, full ? 'legacy-full' : 'legacy-light');
+}
+
+function bindAjaxForms(){
+  document.querySelectorAll('form[data-ajax="1"]').forEach(form => {
+    if(form.dataset.bound === '1') return;
+    form.dataset.bound = '1';
+    form.addEventListener('submit', async function(e){
+      e.preventDefault();
+      if(form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
+      const btn = form.querySelector('button[type="submit"], button:not([type])');
+      const old = btn ? btn.textContent : '';
+      if(btn){ btn.disabled = true; btn.textContent = '处理中...'; }
+      try{
+        const res = await fetch(form.action, {method: form.method || 'POST', body: new FormData(form), headers: {'X-SlowLink-Ajax':'1','Accept':'application/json'}, credentials:'same-origin'});
+        const ct = (res.headers.get('content-type') || '').toLowerCase();
+        let data;
+        if(ct.includes('application/json')){
+          data = await res.json();
+        }else{
+          const text = await res.text();
+          const looksLogin = text.includes('<form') || text.includes('登录') || text.includes('/login');
+          data = {ok:false, kind:'error', message: looksLogin ? '后台登录状态失效，请刷新页面重新登录' : ('接口返回异常内容，HTTP ' + res.status)};
+          console.error('SlowLink non-json response:', res.status, text.slice(0, 500));
+        }
+        if(!res.ok && data.ok !== false) data.ok = false;
+        toast(data.message || (data.ok?'操作成功':'操作失败'), data.kind || (data.ok?'success':'error'));
+        if(data.regex_test_result) renderRegexResult(data.regex_test_result);
+        if(data.precheck_result) renderPrecheckResult(data.precheck_result);
+        if(data.cache_stats) updateCacheStats(data.cache_stats);
+        await requestFullState('form-submit');
+        if(data.ok && !form.dataset.keepInput){
+          form.querySelectorAll('input[name="value"], textarea[name="text"], input[name="code"], input[name="password"]').forEach(i => { if(i.type !== 'hidden') i.value=''; });
+        }
+      }catch(err){ toast('操作失败：' + err, 'error'); }
+      finally { if(btn){ btn.disabled = false; btn.textContent = old; } }
+    });
+  });
+}
+
+function applyTab(shell, target){
+  shell.dataset.active = target;
+  const owner = shell.closest('.settings-shell, .records-shell');
+  if(owner) owner.dataset.active = target;
+}
+document.querySelectorAll('.tab-shell').forEach(shell => {
+  const activeBtn = shell.querySelector('.tab-btn.active');
+  if(activeBtn) applyTab(shell, activeBtn.dataset.tab);
+  shell.querySelectorAll('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+    const target = btn.dataset.tab;
+    shell.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    shell.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const panel = shell.querySelector('.tab-panel[data-panel="' + target + '"]');
+    if(panel) panel.classList.add('active');
+    applyTab(shell, target);
+    if(shell.classList.contains('records-tab-shell') || shell.classList.contains('inner-record-tabs')){
+      requestFullState('records-tab');
+    }
+    if(shell.classList.contains('grouped-tabs') && shell.closest('.account-board')){
+      requestLightState('account-tab');
+    }
+  }));
+});
+document.querySelectorAll('[data-monitor-view]').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('[data-monitor-view]').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active'); currentMonitorView = btn.dataset.monitorView; renderDialogs();
+}));
+document.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
+  document.querySelectorAll('[data-filter]').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active'); currentFilter = btn.dataset.filter; renderDialogs();
+}));
+const dialogSearch = document.getElementById('dialogSearch');
+if(dialogSearch){ dialogSearch.addEventListener('input', function(){ currentSearch = this.value.trim().toLowerCase(); renderDialogs(); }); }
+
+const monitorFoldBtn = document.getElementById('monitorFoldBtn');
+const monitorBody = document.getElementById('monitorBody');
+if(monitorFoldBtn && monitorBody){
+  monitorFoldBtn.addEventListener('click', () => {
+    monitorBody.classList.toggle('collapsed');
+    const closed = monitorBody.classList.contains('collapsed');
+    monitorFoldBtn.textContent = closed ? '展开监听列表' : '收起监听列表';
+    renderDialogs();
+    if(!closed){
+      requestFullState('monitor-open');
+    }
+  });
+}
+
+
+bindAjaxForms();
+requestFullState('initial');
+document.addEventListener('visibilitychange', handleVisibilityChange);
+window.addEventListener('focus', () => {
+  if(!isPageHidden()){
+    requestLightState('focus');
+  }
+});
+startPolling();
+</script>
+{% endblock %}
