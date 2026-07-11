@@ -17,6 +17,7 @@ FULL_PATHS = (
     ".gitignore",
     "CHANGELOG.md",
     "Dockerfile",
+    "LICENSE",
     "README.md",
     "VERSION",
     "app",
@@ -144,7 +145,8 @@ def build(version: str, output_dir: Path) -> list[Path]:
     log_path = output_dir / log_name
     checksum_path = output_dir / checksum_name
 
-    _write_zip(app_path, _collect(ROOT / "app"))
+    app_files = _collect(ROOT / "app") + _collect(ROOT / "LICENSE")
+    _write_zip(app_path, sorted(app_files, key=lambda item: item.as_posix()))
     full_files: list[Path] = []
     for relative in FULL_PATHS:
         full_files.extend(_collect(ROOT / relative))
@@ -177,4 +179,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

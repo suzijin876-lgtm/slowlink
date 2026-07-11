@@ -30,3 +30,5 @@ __pycache__/
 .coverage
 .DS_Store
 
+# Internal planning notes are not part of the public distribution.
+docs/superpowers/

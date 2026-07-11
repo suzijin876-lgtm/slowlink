@@ -159,8 +159,10 @@ class DistributionSystemTests(unittest.TestCase):
                 full_members = archive.namelist()
 
             self.assertTrue(app_members)
-            self.assertTrue(all(name.startswith("app/") for name in app_members))
+            self.assertTrue(all(name == "LICENSE" or name.startswith("app/") for name in app_members))
+            self.assertIn("LICENSE", app_members)
             for required in (
+                "LICENSE",
                 "VERSION",
                 "Dockerfile",
                 "docker-compose.yml",
