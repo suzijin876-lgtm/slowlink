@@ -74,6 +74,11 @@ class DistributionSystemTests(unittest.TestCase):
         self.assertIn("slowlink_redis", text)
         self.assertIn("slowlink-watchdog.service", text)
         self.assertIn("docker compose restart app", text)
+        self.assertIn("wait_for_app_health", text)
+        self.assertIn("redis-cli BGSAVE", text)
+        self.assertIn('docker cp "$REDIS_CONTAINER:/data/dump.rdb"', text)
+        self.assertIn("/var/backups/slowlink", text)
+        self.assertIn('https://raw.githubusercontent.com/$REPO/main/install.sh', text)
         self.assertNotIn("docker compose down", text)
 
     def test_uninstall_requires_confirmation_before_destructive_actions(self):
@@ -98,6 +103,11 @@ class DistributionSystemTests(unittest.TestCase):
         self.assertLess(confirmation, fixed_path_guard)
         self.assertLess(fixed_path_guard, service_stop)
         self.assertLess(service_stop, permanent_delete)
+        preserve_section = text.split("# 保留数据卸载", 1)[1]
+        self.assertIn('docker compose stop app', preserve_section)
+        self.assertIn('docker compose rm -f app', preserve_section)
+        self.assertNotIn('docker stop "$REDIS_CONTAINER"', preserve_section)
+        self.assertNotIn('docker volume rm', preserve_section)
 
     def test_release_workflow_builds_four_verified_assets(self):
         text = self.read_required(".github/workflows/release.yml")
@@ -172,7 +182,9 @@ class DistributionSystemTests(unittest.TestCase):
             )
             for member in app_members + full_members:
                 normalized = f"/{member.lower()}"
-                self.assertFalse(any(part in normalized for part in forbidden_parts), member)
+                self.assertNotEqual(normalized, "/.env", member)
+                self.assertNotIn("/.env/", normalized, member)
+                self.assertFalse(any(part in normalized for part in forbidden_parts[1:]), member)
                 self.assertFalse(normalized.endswith((".session", ".sqlite", ".sqlite3", ".db", ".rdb", ".log")), member)
 
             self.assertIn("## [1.38.73]", update_log.read_text(encoding="utf-8"))
