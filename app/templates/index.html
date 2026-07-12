@@ -175,10 +175,10 @@
         <h3>码识别</h3>
         <div class="code-safe-hero">
           <div>
-            <b>安全模式已开启</b>
-            <p>码识别只做一件事：在你的正则 / 关键词已经命中后，提取完整码用于去重和加速。默认不会单独触发转发。</p>
+            <b>强格式保护已开启</b>
+            <p>完整 Register / Renew 强格式码可直接触发；其它码仍需先命中正则或关键词，只用于准确去重。</p>
           </div>
-          <div class="safe-pill">仅辅助去重</div>
+          <div class="safe-pill">强码可触发</div>
         </div>
         <div class="code-safe-grid">
           <div>✓ Register / Renew 完整码</div>
@@ -188,7 +188,7 @@
         </div>
         <details class="advanced-box code-advanced">
           <summary>高级码规则设置</summary>
-          <p class="hint">看不懂可以不动。这里只给以后新增特殊码格式用；转不转发仍然主要看“正则规则”。</p>
+          <p class="hint">看不懂可以不动。这里只给以后新增特殊码格式用；除完整 Register / Renew 强格式外，转不转发仍然主要看“正则规则”。</p>
           <form action="/add_code_rule" method="post" class="code-rule-form" data-ajax="1">
             <input name="name" placeholder="规则名称，例如 VIP 邀请码">
             <input name="pattern" placeholder="识别正则，例如 VIP-[A-Za-z0-9-]+">

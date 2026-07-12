@@ -7,8 +7,15 @@ from redis_store import get_json, set_json
 
 CODE_RULES_KEY = "code_rules"
 
-REGISTER_SUFFIX_PATTERN = r"(?:[A-Za-z0-9_-]|数字|字母)+"
-REGISTER_SUFFIX_BOUNDARY = r"(?![A-Za-z0-9_-]|[\u3400-\u9fff])"
+REGISTER_SUFFIX_TOKEN_PATTERN = r"(?:[A-Za-z0-9_-]|数字|字母)"
+REGISTER_SUFFIX_PATTERN = REGISTER_SUFFIX_TOKEN_PATTERN + "+"
+OBFUSCATED_REGISTER_SUFFIX_PATTERN = (
+    REGISTER_SUFFIX_TOKEN_PATTERN + r"(?:\**" + REGISTER_SUFFIX_TOKEN_PATTERN + r")*"
+)
+REGISTER_SUFFIX_BOUNDARY = (
+    r"(?=$|\s|[，。！？？；：、）】]"
+    r"|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
+)
 LEGACY_SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
     r"(?:-[^\s*`-]+)*-(?:Register|Renew)_[A-Za-z0-9_-]+"
@@ -35,8 +42,8 @@ LEGACY_REGISTER_RENEW_PATTERN_MIGRATIONS = {
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
 }
 
-# 说明：码识别只负责“提取完整码 / 辅助去重 / 极速通道”。
-# 默认不作为转发触发条件，避免普通验证码、参与码、接口 token、链接参数 code= 乱发。
+# 说明：强格式 Register/Renew 完整码可以直接触发转发。
+# 其它码识别默认只负责提取、辅助去重和加速，避免普通验证码、参与码、token 乱发。
 DEFAULT_CODE_RULES: list[dict[str, Any]] = [
     {
         "name": "生成类注册码（已为您生成）",
@@ -56,7 +63,7 @@ DEFAULT_CODE_RULES: list[dict[str, Any]] = [
         "fast": True,
         "trigger": False,
         "strict_context": False,
-        "note": "支持 SAKURA-30-Register_xxx / 神秘礼物-公费-1-Register_xxx / 多段项目名；只辅助去重，不单独触发",
+        "note": "支持 SAKURA-30-Register_xxx / 神秘礼物-公费-1-Register_xxx / 多段项目名；完整强格式可直接触发",
     },
     {
         "name": "通用连字符邀请码",
@@ -117,7 +124,10 @@ NEGATIVE_CONTEXT = [
 
 REGISTER_RENEW_RE = re.compile(SAFE_REGISTER_RENEW_PATTERN, re.I | re.M)
 MARKDOWN_REGISTER_RENEW_RE = re.compile(
-    r"(?:^|[\s:：，,])([^\s*`-]+(?:-[^\s*`-]+)*-\d+(?:-[^\s*`-]+)*-(?:Register|Renew)_)(?:[*`~]+)?((?:[A-Za-z0-9]|数字|字母)(?:[A-Za-z0-9_-]|数字|字母)*)(?![A-Za-z0-9_-]|[\u3400-\u9fff])",
+    r"(?:^|[\s:：，,])([^\s*`-]+(?:-[^\s*`-]+)*-\d+(?:-[^\s*`-]+)*-(?:Register|Renew)_)(?:[*`~]+)?("
+    + OBFUSCATED_REGISTER_SUFFIX_PATTERN
+    + r")"
+    + REGISTER_SUFFIX_BOUNDARY,
     re.I | re.M,
 )
 
@@ -259,13 +269,14 @@ def _clean_code_value(value: str) -> str:
 
 
 def _extract_markdown_register_renew_code(text: str) -> str:
-    """Extract Register/Renew codes even when the suffix is markdown-bold."""
+    """Extract strong codes and remove literal asterisks used to obscure suffixes."""
     raw = text or ""
     for candidate in [raw, *raw.splitlines()]:
         match = MARKDOWN_REGISTER_RENEW_RE.search(candidate)
         if not match:
             continue
-        code = _clean_code_value((match.group(1) or "") + (match.group(2) or ""))
+        suffix = re.sub(r"\*+", "", match.group(2) or "")
+        code = _clean_code_value((match.group(1) or "") + suffix)
         if REGISTER_RENEW_RE.search(code):
             return code
     return ""
@@ -349,36 +360,36 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
     compact = re.sub(r"[\s\u200b\u200c\u200d\ufeff\u2060]+", "", raw)
     candidates = [raw, compact] if compact != raw else [raw]
     compiled_rules = _compiled_rules()
-    if not trigger_only:
-        direct_code = _extract_markdown_register_renew_code(raw)
-        if direct_code:
-            direct_idx, direct_rule = 0, {
-                "name": "Register/Renew 完整码",
-                "pattern": REGISTER_RENEW_RE.pattern,
-                "fast": True,
-                "trigger": False,
-                "strict_context": False,
+    direct_code = _extract_markdown_register_renew_code(raw)
+    if direct_code:
+        direct_idx, direct_rule = 0, {
+            "name": "Register/Renew 完整码",
+            "pattern": REGISTER_RENEW_RE.pattern,
+            "fast": True,
+            "trigger": False,
+            "strict_context": False,
+        }
+        for idx, rule, _cre in compiled_rules:
+            pattern = str(rule.get("pattern") or "")
+            if "Register" in pattern and "Renew" in pattern:
+                direct_idx, direct_rule = idx, rule
+                break
+        safe, safe_reason = _is_safe_code_context(raw, direct_code, direct_rule)
+        if not safe_only or safe:
+            can_trigger = safe and (trigger_only or bool(direct_rule.get("trigger", False)))
+            return {
+                "index": direct_idx,
+                "name": direct_rule.get("name") or "Register/Renew 完整码",
+                "pattern": direct_rule.get("pattern") or REGISTER_RENEW_RE.pattern,
+                "code": direct_code,
+                "identity": _canonical_code_identity(direct_code, direct_rule, raw),
+                "fast": bool(direct_rule.get("fast", True)),
+                "trigger": bool(trigger_only or direct_rule.get("trigger", False)),
+                "can_trigger": can_trigger,
+                "strict_context": bool(direct_rule.get("strict_context", False)),
+                "safe": safe,
+                "safe_reason": safe_reason,
             }
-            for idx, rule, _cre in compiled_rules:
-                pattern = str(rule.get("pattern") or "")
-                if "Register" in pattern and "Renew" in pattern:
-                    direct_idx, direct_rule = idx, rule
-                    break
-            safe, safe_reason = _is_safe_code_context(raw, direct_code, direct_rule)
-            if not safe_only or safe:
-                return {
-                    "index": direct_idx,
-                    "name": direct_rule.get("name") or "Register/Renew 完整码",
-                    "pattern": direct_rule.get("pattern") or REGISTER_RENEW_RE.pattern,
-                    "code": direct_code,
-                    "identity": _canonical_code_identity(direct_code, direct_rule, raw),
-                    "fast": bool(direct_rule.get("fast", True)),
-                    "trigger": bool(direct_rule.get("trigger", False)),
-                    "can_trigger": False,
-                    "strict_context": bool(direct_rule.get("strict_context", False)),
-                    "safe": safe,
-                    "safe_reason": safe_reason,
-                }
 
     for idx, rule, cre in compiled_rules:
         if trigger_only and not bool(rule.get("trigger", False)):

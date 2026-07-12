@@ -13,7 +13,8 @@ APP = ROOT / "app"
 EXPECTED_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
 SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
-    r"(?:-[^\s*`-]+)*-(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+(?![A-Za-z0-9_-]|[\u3400-\u9fff])"
+    r"(?:-[^\s*`-]+)*-(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+"
+    r"(?=$|\s|[，。！？？；：、）】]|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
 )
 LEGACY_SERVER_PATTERN = r"[^\s]+(?:-[^\s]+)*-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+"
 
