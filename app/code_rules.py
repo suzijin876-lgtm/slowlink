@@ -7,15 +7,27 @@ from redis_store import get_json, set_json
 
 CODE_RULES_KEY = "code_rules"
 
-SAFE_REGISTER_RENEW_PATTERN = (
+REGISTER_SUFFIX_PATTERN = r"(?:[A-Za-z0-9_-]|数字|字母)+"
+REGISTER_SUFFIX_BOUNDARY = r"(?![A-Za-z0-9_-]|[\u3400-\u9fff])"
+LEGACY_SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
     r"(?:-[^\s*`-]+)*-(?:Register|Renew)_[A-Za-z0-9_-]+"
 )
-SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
+SAFE_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
+    r"(?:-[^\s*`-]+)*-(?:Register|Renew)_" + REGISTER_SUFFIX_PATTERN + REGISTER_SUFFIX_BOUNDARY
+)
+LEGACY_SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
     r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_[A-Za-z0-9_-]+"
 )
+SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
+    r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_" + REGISTER_SUFFIX_PATTERN + REGISTER_SUFFIX_BOUNDARY
+)
 LEGACY_REGISTER_RENEW_PATTERN_MIGRATIONS = {
+    LEGACY_SAFE_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
+    LEGACY_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     r"[A-Za-z0-9]+-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     r"[^\s]+-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
     r"[^\s]+(?:-[^\s]+)*-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
@@ -105,7 +117,7 @@ NEGATIVE_CONTEXT = [
 
 REGISTER_RENEW_RE = re.compile(SAFE_REGISTER_RENEW_PATTERN, re.I | re.M)
 MARKDOWN_REGISTER_RENEW_RE = re.compile(
-    r"(?:^|[\s:：，,])([^\s*`-]+(?:-[^\s*`-]+)*-\d+(?:-[^\s*`-]+)*-(?:Register|Renew)_)(?:[*`~]+)?([A-Za-z0-9][A-Za-z0-9_-]*)(?![A-Za-z0-9_-])",
+    r"(?:^|[\s:：，,])([^\s*`-]+(?:-[^\s*`-]+)*-\d+(?:-[^\s*`-]+)*-(?:Register|Renew)_)(?:[*`~]+)?((?:[A-Za-z0-9]|数字|字母)(?:[A-Za-z0-9_-]|数字|字母)*)(?![A-Za-z0-9_-]|[\u3400-\u9fff])",
     re.I | re.M,
 )
 

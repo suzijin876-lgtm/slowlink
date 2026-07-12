@@ -145,7 +145,7 @@ def ttl_minutes_for_profile(profile: dict[str, Any], fallback: int | None = None
 
 URL_RE = re.compile(r"(?:https?://|www\.)\S+|t\.me/\S+", re.I)
 REGISTER_RENEW_CODE_RE = re.compile(
-    r"(?<![A-Za-z0-9_-])([^\s/?&=#]+(?:-[^\s/?&=#]+)*-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+)",
+    r"(?<![A-Za-z0-9_-])([^\s/?&=#]+(?:-[^\s/?&=#]+)*-\d+-(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+)(?![A-Za-z0-9_-]|[\u3400-\u9fff])",
     re.I,
 )
 

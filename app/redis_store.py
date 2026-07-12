@@ -13,12 +13,17 @@ from config import REDIS_HOST, REDIS_PORT, LISTENER_WORKERS
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=5, socket_keepalive=True, retry_on_timeout=True, health_check_interval=30)
 
 LEGACY_PURE_CODE_TRIGGER_RULE = r"^(?!.*码使用)[^-]+-\d+-(?:Register|Renew)_.+$"
-SAFE_PURE_CODE_TRIGGER_RULE = (
+LEGACY_SAFE_PURE_CODE_TRIGGER_RULE = (
     r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
     r"(?:Register|Renew)_[A-Za-z0-9_-]+$"
 )
+SAFE_PURE_CODE_TRIGGER_RULE = (
+    r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
+    r"(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+$"
+)
 KNOWN_REGEX_RULE_MIGRATIONS = {
     LEGACY_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
+    LEGACY_SAFE_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
 }
 
 
