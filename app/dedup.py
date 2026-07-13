@@ -73,6 +73,15 @@ JOINT_LOTTERY_KWS = ["联合抽奖", "发起了通用抽奖活动", "通用抽�
 LONG_TERM_KWS = ["长期活动", "持续多日", "长期抽奖", "延期", "延迟开奖", "开奖延期", "活动延期", "持续到", "截止", "截至"]
 INVITE_KWS = ["邀请码", "注册码", "注册代码", "邀请链接", "注册链接", "register?code", "INV-", "已为您生成", "生成了", "兑换码", "激活码"]
 
+LOTTERY_ID_RE = re.compile(
+    r"(?:抽奖\s*ID|lottery\s*id)\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9_-]{5,127})",
+    re.I,
+)
+LOTTERY_SEED_RE = re.compile(
+    r"(?:随机种子(?:哈希)?|random\s+seed(?:\s+hash)?)\s*[:：]\s*([a-f0-9]{16,128})",
+    re.I,
+)
+
 
 def _lower(text: str) -> str:
     return (text or "").lower()
@@ -96,6 +105,19 @@ def classify_activity(text: str) -> str:
 def ttl_policy_for_text(text: str) -> str:
     low = _lower(text)
     return "long_term" if any(kw.lower() in low for kw in LONG_TERM_KWS) else "normal"
+
+
+def extract_lottery_identity(text: str) -> str:
+    """Return a stable identity shared by alternate templates for one lottery."""
+    raw = unicodedata.normalize("NFKC", text or "")
+    raw = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", raw)
+    match = LOTTERY_ID_RE.search(raw)
+    if match:
+        return "id:" + match.group(1).lower()
+    match = LOTTERY_SEED_RE.search(raw)
+    if match:
+        return "seed:" + match.group(1).lower()
+    return ""
 
 
 def ttl_minutes_for_activity(activity: str, fallback: int | None = None) -> int:
@@ -266,7 +288,14 @@ def build_profile(text: str, message_link: str = "") -> dict[str, Any]:
     ttl_policy = ttl_policy_for_text(text)
     normalized = normalize_for_text_dedup(text)
     text_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    dedup_id = "text:" + text_hash
+    lottery_identity = extract_lottery_identity(text) if activity in {"lottery", "joint_lottery"} else ""
+    if lottery_identity:
+        identity_hash = hashlib.sha256(lottery_identity.encode("utf-8")).hexdigest()
+        dedup_id = "lottery:" + identity_hash
+        dedup_strategy = "lottery_identity"
+    else:
+        dedup_id = "text:" + text_hash
+        dedup_strategy = "normalized_text"
 
     return {
         "activity": activity,
@@ -275,6 +304,9 @@ def build_profile(text: str, message_link: str = "") -> dict[str, Any]:
         "dedup_id": dedup_id,
         "message_link": message_link,
         "text_hash": text_hash,
+        "lottery_identity": lottery_identity,
+        "lottery_mode": "id" if lottery_identity else "",
+        "dedup_strategy": dedup_strategy,
     }
 
 
@@ -290,11 +322,10 @@ def check_and_mark(
     """Unified dedup with two layers, both checked in a single Redis pipeline.
 
     Layer 1: Same original message link -> block.
-    Layer 2: Same normalized text hash -> block.
+    Layer 2: Same stable lottery identity or normalized text hash -> block.
     """
     profile = build_profile(text, message_link)
-    text_hash = profile["text_hash"]
-    text_key = "dedup:text:" + text_hash
+    content_key = "dedup:" + profile["dedup_id"]
     link_key = "dedup:link:" + sha(message_link) if message_link else ""
 
     real_ttl_minutes = ttl_minutes_for_profile(profile, ttl_minutes) if ttl_minutes is None else int(ttl_minutes)
@@ -307,14 +338,17 @@ def check_and_mark(
     # SET NX stores dedup_id as value, so the stored value is always dedup_id
     # — we never need a follow-up GET for existing_id.
     pipe = r.pipeline()
-    pipe.set(text_key, dedup_id, ex=ttl_seconds, nx=True)
+    pipe.set(content_key, dedup_id, ex=ttl_seconds, nx=True)
     if message_link:
         pipe.set(link_key, dedup_id, ex=ttl_seconds, nx=True)
     results = pipe.execute()
 
-    text_is_new = results[0]
-    if not text_is_new:
-        reason = f"相同文本内容重复（{real_ttl_minutes}分钟内）"
+    content_is_new = results[0]
+    if not content_is_new:
+        if profile.get("lottery_identity"):
+            reason = f"相同抽奖 ID 重复（{real_ttl_minutes}分钟内）"
+        else:
+            reason = f"相同文本内容重复（{real_ttl_minutes}分钟内）"
         _record_duplicate(dedup_id, profile, reason, source, message_link, ttl_seconds)
         return True, reason, profile
 
@@ -323,7 +357,7 @@ def check_and_mark(
         _record_duplicate(dedup_id, profile, reason, source, message_link, ttl_seconds)
         return True, reason, profile
 
-    _register_new(profile, [text_key] + ([link_key] if message_link else []), ttl_seconds, source, "首次命中")
+    _register_new(profile, [content_key] + ([link_key] if message_link else []), ttl_seconds, source, "首次命中")
     return False, "未重复", profile
 
 
