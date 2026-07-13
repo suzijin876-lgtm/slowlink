@@ -81,6 +81,11 @@ LOTTERY_SEED_RE = re.compile(
     r"(?:随机种子(?:哈希)?|random\s+seed(?:\s+hash)?)\s*[:：]\s*([a-f0-9]{16,128})",
     re.I,
 )
+SCRATCH_PRIZE_RE = re.compile(
+    r"(?<![A-Za-z0-9])([+-]?)\s*(\d+(?:\.\d+)?)\s*币\s*(?:[x×*]\s*(\d+))?",
+    re.I,
+)
+LOTTERY_TEMPLATE_WINDOW_SECONDS = 10 * 60
 
 
 def _lower(text: str) -> str:
@@ -118,6 +123,38 @@ def extract_lottery_identity(text: str) -> str:
     if match:
         return "seed:" + match.group(1).lower()
     return ""
+
+
+def _lottery_source_identity(message_link: str, source: str) -> str:
+    match = re.search(
+        r"(?:https?://)?t\.me/(c/\d+|[A-Za-z0-9_]+)(?:/\d+)?(?:[/?#]|$)",
+        message_link or "",
+        flags=re.I,
+    )
+    if match:
+        return match.group(1).lower()
+    normalized = unicodedata.normalize("NFKC", source or "").lower()
+    normalized = re.sub(r"[^a-z0-9\u3400-\u9fff]+", "", normalized)
+    return normalized[:80]
+
+
+def extract_lottery_template_identity(text: str, message_link: str = "", source: str = "") -> str:
+    """Correlate high-confidence no-ID scratch-lottery template variants."""
+    raw = unicodedata.normalize("NFKC", text or "")
+    if "刮刮乐" not in raw:
+        return ""
+    source_identity = _lottery_source_identity(message_link, source)
+    if not source_identity:
+        return ""
+
+    prizes: list[str] = []
+    for sign, amount, quantity in SCRATCH_PRIZE_RE.findall(raw):
+        normalized_amount = amount.rstrip("0").rstrip(".") if "." in amount else amount
+        prizes.append(f"{sign}{normalized_amount}币x{int(quantity or 1)}")
+    if len(prizes) < 2:
+        return ""
+
+    return f"source:{source_identity}|mode:刮刮乐|prizes:{'|'.join(sorted(prizes))}"
 
 
 def ttl_minutes_for_activity(activity: str, fallback: int | None = None) -> int:
@@ -282,13 +319,14 @@ def normalize_for_text_dedup(text: str) -> str:
 
 # ---- Profile building ----
 
-def build_profile(text: str, message_link: str = "") -> dict[str, Any]:
+def build_profile(text: str, message_link: str = "", source: str = "") -> dict[str, Any]:
     """Build a lightweight activity profile for TTL calculation and UI display."""
     activity = classify_activity(text)
     ttl_policy = ttl_policy_for_text(text)
     normalized = normalize_for_text_dedup(text)
     text_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     lottery_identity = extract_lottery_identity(text) if activity in {"lottery", "joint_lottery"} else ""
+    lottery_template_identity = ""
     if lottery_identity:
         identity_hash = hashlib.sha256(lottery_identity.encode("utf-8")).hexdigest()
         dedup_id = "lottery:" + identity_hash
@@ -296,6 +334,8 @@ def build_profile(text: str, message_link: str = "") -> dict[str, Any]:
     else:
         dedup_id = "text:" + text_hash
         dedup_strategy = "normalized_text"
+        if activity in {"lottery", "joint_lottery"}:
+            lottery_template_identity = extract_lottery_template_identity(text, message_link, source)
 
     return {
         "activity": activity,
@@ -305,6 +345,7 @@ def build_profile(text: str, message_link: str = "") -> dict[str, Any]:
         "message_link": message_link,
         "text_hash": text_hash,
         "lottery_identity": lottery_identity,
+        "lottery_template_identity": lottery_template_identity,
         "lottery_mode": "id" if lottery_identity else "",
         "dedup_strategy": dedup_strategy,
     }
@@ -324,9 +365,11 @@ def check_and_mark(
     Layer 1: Same original message link -> block.
     Layer 2: Same stable lottery identity or normalized text hash -> block.
     """
-    profile = build_profile(text, message_link)
+    profile = build_profile(text, message_link, source)
     content_key = "dedup:" + profile["dedup_id"]
     link_key = "dedup:link:" + sha(message_link) if message_link else ""
+    template_identity = profile.get("lottery_template_identity") or ""
+    template_key = "dedup:lottery-template:" + sha(template_identity) if template_identity else ""
 
     real_ttl_minutes = ttl_minutes_for_profile(profile, ttl_minutes) if ttl_minutes is None else int(ttl_minutes)
     if int(real_ttl_minutes) <= 0:
@@ -341,6 +384,8 @@ def check_and_mark(
     pipe.set(content_key, dedup_id, ex=ttl_seconds, nx=True)
     if message_link:
         pipe.set(link_key, dedup_id, ex=ttl_seconds, nx=True)
+    if template_key:
+        pipe.set(template_key, dedup_id, ex=LOTTERY_TEMPLATE_WINDOW_SECONDS, nx=True)
     results = pipe.execute()
 
     content_is_new = results[0]
@@ -352,12 +397,28 @@ def check_and_mark(
         _record_duplicate(dedup_id, profile, reason, source, message_link, ttl_seconds)
         return True, reason, profile
 
-    if message_link and not results[1]:
+    result_index = 1
+    link_is_new = results[result_index] if message_link else True
+    result_index += 1 if message_link else 0
+    template_is_new = results[result_index] if template_key else True
+
+    if not link_is_new:
         reason = f"同一条原消息链接重复（{real_ttl_minutes}分钟内）"
         _record_duplicate(dedup_id, profile, reason, source, message_link, ttl_seconds)
         return True, reason, profile
 
-    _register_new(profile, [content_key] + ([link_key] if message_link else []), ttl_seconds, source, "首次命中")
+    if not template_is_new:
+        reason = "同一抽奖的不同模板重复（10分钟内）"
+        existing_id = r.get(template_key) or dedup_id
+        _record_duplicate(existing_id, profile, reason, source, message_link, ttl_seconds)
+        return True, reason, profile
+
+    redis_keys = [content_key]
+    if link_key:
+        redis_keys.append(link_key)
+    if template_key:
+        redis_keys.append(template_key)
+    _register_new(profile, redis_keys, ttl_seconds, source, "首次命中")
     return False, "未重复", profile
 
 
