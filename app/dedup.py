@@ -138,9 +138,60 @@ def _lottery_source_identity(message_link: str, source: str) -> str:
     return normalized[:80]
 
 
+def _normalize_lottery_identity_value(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").lower().replace("×", "x")
+    normalized = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", normalized)
+    normalized = EMOJI_RE.sub("", normalized)
+    normalized = re.sub(r"[`*_~\s]+", "", normalized)
+    normalized = re.sub(r"[\[\]【】（）(){}<>《》|:：;；,，。!！?？/\\]", "", normalized)
+    return normalized.strip()
+
+
+def _extract_lottery_line_value(raw: str, labels: tuple[str, ...]) -> str:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    for line in raw.splitlines():
+        candidate = re.sub(r"^[^\w\u3400-\u9fff]+", "", line.strip())
+        match = re.match(rf"(?:{label_pattern})\s*[:：]\s*(.+?)\s*$", candidate, flags=re.I)
+        if match:
+            return _normalize_lottery_identity_value(match.group(1))
+    return ""
+
+
+def _extract_numbered_lottery_prizes(raw: str) -> list[str]:
+    prizes: list[str] = []
+    in_prizes = False
+    for line in raw.splitlines():
+        candidate = line.strip()
+        if not in_prizes:
+            if re.search(r"奖品(?:内容)?\s*[:：]?\s*$", candidate):
+                in_prizes = True
+            continue
+        if not candidate:
+            continue
+        match = re.match(r"^\s*\d+\s*[.、)]\s*(.+?)\s*$", candidate)
+        if not match:
+            if prizes:
+                break
+            continue
+        prize = _normalize_lottery_identity_value(match.group(1))
+        if prize:
+            prizes.append(prize)
+    return sorted(prizes)
+
+
 def extract_lottery_template_identity(text: str, message_link: str = "", source: str = "") -> str:
-    """Correlate high-confidence no-ID scratch-lottery template variants."""
+    """Correlate high-confidence lottery template variants for a short window."""
     raw = unicodedata.normalize("NFKC", text or "")
+    creator = _extract_lottery_line_value(raw, ("创建者", "发起人"))
+    keyword = _extract_lottery_line_value(raw, ("参与关键词",))
+    draw_time = _extract_lottery_line_value(raw, ("定时开奖", "开奖时间"))
+    numbered_prizes = _extract_numbered_lottery_prizes(raw)
+    if creator and keyword and draw_time and len(numbered_prizes) >= 2:
+        return (
+            f"event:creator:{creator}|keyword:{keyword}|draw:{draw_time}"
+            f"|prizes:{'|'.join(numbered_prizes)}"
+        )
+
     if "刮刮乐" not in raw:
         return ""
     source_identity = _lottery_source_identity(message_link, source)
@@ -326,7 +377,11 @@ def build_profile(text: str, message_link: str = "", source: str = "") -> dict[s
     normalized = normalize_for_text_dedup(text)
     text_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     lottery_identity = extract_lottery_identity(text) if activity in {"lottery", "joint_lottery"} else ""
-    lottery_template_identity = ""
+    lottery_template_identity = (
+        extract_lottery_template_identity(text, message_link, source)
+        if activity in {"lottery", "joint_lottery"}
+        else ""
+    )
     if lottery_identity:
         identity_hash = hashlib.sha256(lottery_identity.encode("utf-8")).hexdigest()
         dedup_id = "lottery:" + identity_hash
@@ -334,8 +389,6 @@ def build_profile(text: str, message_link: str = "", source: str = "") -> dict[s
     else:
         dedup_id = "text:" + text_hash
         dedup_strategy = "normalized_text"
-        if activity in {"lottery", "joint_lottery"}:
-            lottery_template_identity = extract_lottery_template_identity(text, message_link, source)
 
     return {
         "activity": activity,
@@ -408,15 +461,21 @@ def check_and_mark(
         return True, reason, profile
 
     if not template_is_new:
-        reason = "同一抽奖的不同模板重复（10分钟内）"
         existing_id = r.get(template_key) or dedup_id
-        _record_duplicate(existing_id, profile, reason, source, message_link, ttl_seconds)
-        return True, reason, profile
+        explicit_id_conflict = (
+            bool(profile.get("lottery_identity"))
+            and str(existing_id).startswith("lottery:")
+            and existing_id != dedup_id
+        )
+        if not explicit_id_conflict:
+            reason = "同一抽奖的不同模板重复（10分钟内）"
+            _record_duplicate(existing_id, profile, reason, source, message_link, ttl_seconds)
+            return True, reason, profile
 
     redis_keys = [content_key]
     if link_key:
         redis_keys.append(link_key)
-    if template_key:
+    if template_key and template_is_new:
         redis_keys.append(template_key)
     _register_new(profile, redis_keys, ttl_seconds, source, "首次命中")
     return False, "未重复", profile
