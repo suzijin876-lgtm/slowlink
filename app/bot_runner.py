@@ -439,10 +439,14 @@ class BotManager:
                     self._reconnect_requested = True
                     self._reconnect_reason = "_proactive_"
             # No message for 30 min -> reconnect.
-            if self._last_message_time and now - self._last_message_time > 1800 and not self._reconnect_requested:
+            if (
+                self._last_message_time
+                and now - max(self._last_message_time, self._last_delay_reconnect_ts) > 1800
+                and not self._reconnect_requested
+            ):
                 self._reconnect_requested = True
-                self._reconnect_reason = "30min no message"
-                push_event("warning", self._reconnect_reason)
+                self._reconnect_reason = "连续 30 分钟未收到消息"
+                push_event("warning", f"{self._reconnect_reason}，准备轻量重连")
             if now - last_heartbeat_store >= 120:
                 last_heartbeat_store = now
                 set_value("listener_heartbeat_ts", str(int(now)))
@@ -506,8 +510,7 @@ class BotManager:
             push_event("warning", "部分转发目标预缓存失败，发送时会快速失败，不再刷新全部群")
         return ok, fail, len(targets)
 
-    def _record_telegram_delay(self, delay_sec: float, source_name: str, rule: str):
-        rule_short = (rule or "")[:60] + ("..." if len(rule or "") > 60 else "")
+    def _record_telegram_delay(self, delay_sec: float, source_name: str):
         """Track consecutive high Telegram push delays and request reconnect if needed.
 
         Responsive thresholds: one >=60s delay or two consecutive >=30s delays
@@ -518,23 +521,27 @@ class BotManager:
 
         if delay_sec >= TELEGRAM_DELAY_IMMEDIATE_RECONNECT_SECONDS:
             self._telegram_delay_high_count += 1
-            push_event("warning", f"Telegram 推送高延迟 {delay_sec:.1f}s，连续 {self._telegram_delay_high_count} 次，来源 {source_name}")
             if cooldown_ok and not self._reconnect_requested:
                 self._reconnect_requested = True
-                self._reconnect_reason = f"单次 Telegram 推送延迟 {delay_sec:.1f}s >= {TELEGRAM_DELAY_IMMEDIATE_RECONNECT_SECONDS}s，来源 {source_name}，规则 {rule_short}"
+                self._reconnect_reason = f"单次 Telegram 推送延迟 {delay_sec:.1f}s，来源 {source_name}"
+                push_event("warning", f"{self._reconnect_reason}，准备轻量重连")
                 self._telegram_delay_high_count = 0
+            else:
+                push_event("warning", f"Telegram 推送高延迟 {delay_sec:.1f}s，连续 {self._telegram_delay_high_count} 次，来源 {source_name}")
             return
 
         if delay_sec >= TELEGRAM_DELAY_HIGH_SECONDS:
             self._telegram_delay_high_count += 1
-            push_event("warning", f"Telegram 推送高延迟 {delay_sec:.1f}s，连续 {self._telegram_delay_high_count} 次，来源 {source_name}")
             if (
                 self._telegram_delay_high_count >= TELEGRAM_DELAY_RECONNECT_COUNT
                 and cooldown_ok
                 and not self._reconnect_requested
             ):
                 self._reconnect_requested = True
-                self._reconnect_reason = f"连续 {self._telegram_delay_high_count} 次 Telegram 推送延迟 >= {TELEGRAM_DELAY_HIGH_SECONDS}s，最近 {delay_sec:.1f}s，来源 {source_name}，规则 {rule_short}"
+                self._reconnect_reason = f"Telegram 连续 {self._telegram_delay_high_count} 次推送高延迟，最近 {delay_sec:.1f}s，来源 {source_name}"
+                push_event("warning", f"{self._reconnect_reason}，准备轻量重连")
+            else:
+                push_event("warning", f"Telegram 推送高延迟 {delay_sec:.1f}s，连续 {self._telegram_delay_high_count} 次，来源 {source_name}")
         elif delay_sec < 10:
             # A normal timely update means the push stream has recovered.
             if self._telegram_delay_high_count:
@@ -556,14 +563,11 @@ class BotManager:
         self._last_delay_reconnect_ts = time.time()
         if proactive:
             log_line("info", "定期刷新连接（2h）")
-        else:
-            log_line("warning", f"重连：{reason}")
-            push_event("warning", f"推送延迟偏高，轻量重连中：{reason}")
         try:
             try:
                 await client.disconnect()
             except Exception as e:
-                log_line("warning", f"自动重连：断开旧连接时出现异常：{e}")
+                push_event("warning", f"轻量重连断开旧连接时出现异常：{e}")
             await asyncio.sleep(1)
             await client.connect()
             if not await client.is_user_authorized():
@@ -580,12 +584,10 @@ class BotManager:
                 except Exception:
                     pass
             if not proactive:
-                log_line("info", "重连完成")
-                push_event("success", "重连完成，复用已有缓存")
+                push_event("success", "轻量重连完成，复用已有缓存")
         except Exception as e:
             add_fail({"stage": "delay_reconnect", "error": str(e)})
             push_event("error", f"自动重连监听失败：{e}")
-            log_line("error", f"自动重连监听失败：{e}")
 
     async def _priority_worker(self, client: TelegramClient, worker_id: int):
         while True:
@@ -691,9 +693,7 @@ class BotManager:
                 push_event("warning", f"命中但来源已排除：{source_name}")
                 return
 
-            if telegram_delay_sec >= 60:
-                log_line("info", f"Telegram 推送延迟 {telegram_delay_sec:.1f}s，来源 {source_name}")
-            self._record_telegram_delay(telegram_delay_sec, source_name, rule)
+            self._record_telegram_delay(telegram_delay_sec, source_name)
 
             target_raw = self._cached_str("target_chat")
             targets = split_dialog_values(target_raw)
