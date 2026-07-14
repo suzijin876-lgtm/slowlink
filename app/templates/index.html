@@ -133,6 +133,14 @@
       <div class="tab-panel" data-panel="target">
         <h3>转发目标</h3>
         <form action="/set_target" method="post" class="row" data-ajax="1" data-keep-input="1"><input id="targetChatInput" name="value" value="{{ target_chat }}" placeholder="@username 或 -100ID；多个目标用逗号隔开"><button>保存</button></form>
+        <h4>公开链接格式</h4>
+        <form action="/set_link_domain" method="post" class="row" data-ajax="1" data-keep-input="1">
+          <select id="publicLinkDomain" name="value" aria-label="公开链接格式">
+            <option value="t.me" {% if public_link_domain=='t.me' %}selected{% endif %}>t.me 标准模式</option>
+            <option value="telegram.me" {% if public_link_domain=='telegram.me' %}selected{% endif %}>telegram.me 兼容模式</option>
+          </select>
+          <button>保存</button>
+        </form>
         <form action="/test_send" method="post" data-ajax="1"><button>测试发送到目标</button></form>
         <p class="hint">支持 @username、username、-100ID。</p>
       </div>
@@ -457,6 +465,10 @@ function updateStatus(data){
   const targetInput = document.getElementById('targetChatInput');
   if(targetInput && typeof data.target_chat !== 'undefined' && document.activeElement !== targetInput){
     targetInput.value = data.target_chat || '';
+  }
+  const publicLinkDomain = document.getElementById('publicLinkDomain');
+  if(publicLinkDomain && typeof data.public_link_domain !== 'undefined' && document.activeElement !== publicLinkDomain){
+    publicLinkDomain.value = data.public_link_domain || 't.me';
   }
   if(data.stats){
     const st = data.stats || {};

@@ -706,7 +706,7 @@ class BotManager:
                 _evt_msg2 = event.message
             except Exception:
                 _evt_msg2 = None
-            link = build_message_link(chat, _evt_msg2) if _evt_msg2 else ""
+            link = build_message_link(chat, _evt_msg2, self._cached_str("public_link_domain")) if _evt_msg2 else ""
             dedup_enabled, mode, _dedup_other, code_minutes = self._cached_dedup_settings()
             reserved_code_key = ""
             dedup_profile = None

@@ -268,6 +268,11 @@ def _heartbeat_payload() -> dict:
     }
 
 
+def _public_link_domain() -> str:
+    value = str(get("public_link_domain", "t.me") or "t.me").strip().lower()
+    return value if value in {"t.me", "telegram.me"} else "t.me"
+
+
 def _state_payload(light: bool = False) -> dict:
     if light:
         return {
@@ -276,6 +281,7 @@ def _state_payload(light: bool = False) -> dict:
             "tg_current_user": get("tg_current_user", "未登录") or "未登录",
             "bot_status": get("bot_status", "stopped") or "stopped",
             "target_chat": get("target_chat", "") or "",
+            "public_link_domain": _public_link_domain(),
             "heartbeat": _heartbeat_payload(),
         }
     dialogs = [] if light else _prepare_dialog_cache()
@@ -286,6 +292,7 @@ def _state_payload(light: bool = False) -> dict:
         "tg_current_user": get("tg_current_user", "未登录") or "未登录",
         "bot_status": get("bot_status", "stopped") or "stopped",
         "target_chat": get("target_chat", "") or "",
+        "public_link_domain": _public_link_domain(),
         "stats": stats,
         "monitor_chats": sorted(smembers("monitor_chats")),
         "exclude_chats": sorted(smembers("exclude_chats")),
@@ -315,6 +322,7 @@ def _page_data() -> dict:
         "tg_current_user": get("tg_current_user", "未登录") or "未登录",
         "bot_status": get("bot_status", "stopped") or "stopped",
         "target_chat": get("target_chat", "") or "",
+        "public_link_domain": _public_link_domain(),
         "monitor_chats": sorted(smembers("monitor_chats")),
         "dialog_cache": dialogs,
         "dialog_stats": _dialog_stats(dialogs),
@@ -504,6 +512,23 @@ def set_target():
             pass
         return done("转发目标已保存", "success")
     return done("目标不能为空", "error", ok=False)
+
+
+@app.post("/set_link_domain")
+def set_link_domain():
+    gate = require_login()
+    if gate:
+        return gate
+    value = request.form.get("value", "t.me").strip().lower()
+    if value not in {"t.me", "telegram.me"}:
+        return done("公开链接格式不正确", "error", ok=False)
+    set_value("public_link_domain", value)
+    try:
+        manager.clear_runtime_cache()
+    except Exception:
+        pass
+    label = "t.me 标准模式" if value == "t.me" else "telegram.me 兼容模式"
+    return done(f"公开链接已切换为 {label}", "success")
 
 
 @app.post("/test_send")
@@ -895,6 +920,7 @@ def export_config():
         "version": APP_VERSION,
         "export_time": format_time(),
         "target_chat": get("target_chat", "") or "",
+        "public_link_domain": _public_link_domain(),
         "monitor_chats": sorted(smembers("monitor_chats")),
         "exclude_chats": sorted(smembers("exclude_chats")),
         "regex_rules": sorted(smembers("regex_rules")),
@@ -945,6 +971,11 @@ def import_config():
         if mode != "rules_only" and "target_chat" in payload:
             set_value("target_chat", str(payload.get("target_chat") or ""))
             imported.append("转发目标")
+        if mode != "rules_only" and "public_link_domain" in payload:
+            domain = str(payload.get("public_link_domain") or "").strip().lower()
+            if domain in {"t.me", "telegram.me"}:
+                set_value("public_link_domain", domain)
+                imported.append("公开链接格式")
         set_items = [
             ("monitor_chats", "monitor_chats", "监听列表"),
             ("exclude_chats", "exclude_chats", "排除列表"),

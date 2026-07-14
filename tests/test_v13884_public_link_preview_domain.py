@@ -39,7 +39,7 @@ class PublicLinkPreviewDomainV13884Tests(unittest.TestCase):
         message = SimpleNamespace(id=115924, reply_to=None)
 
         self.assertEqual(
-            build_message_link(chat, message),
+            build_message_link(chat, message, "telegram.me"),
             "https://telegram.me/Jsoo8888/115924",
         )
 
@@ -49,7 +49,7 @@ class PublicLinkPreviewDomainV13884Tests(unittest.TestCase):
         message = SimpleNamespace(id=456, reply_to=reply_to)
 
         self.assertEqual(
-            build_message_link(chat, message),
+            build_message_link(chat, message, "telegram.me"),
             "https://telegram.me/public_forum/321/456",
         )
 
@@ -58,7 +58,7 @@ class PublicLinkPreviewDomainV13884Tests(unittest.TestCase):
         message = SimpleNamespace(id=115924, reply_to=None)
 
         self.assertEqual(
-            build_message_link(chat, message),
+            build_message_link(chat, message, "telegram.me"),
             "https://t.me/c/3739634966/115924",
         )
 
@@ -68,7 +68,7 @@ class PublicLinkPreviewDomainV13884Tests(unittest.TestCase):
         message = SimpleNamespace(id=456, reply_to=reply_to)
 
         self.assertEqual(
-            build_message_link(chat, message),
+            build_message_link(chat, message, "telegram.me"),
             "https://t.me/c/3739634966/321/456",
         )
 

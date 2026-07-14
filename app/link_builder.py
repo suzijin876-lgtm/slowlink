@@ -69,9 +69,10 @@ def get_chat_keys(chat) -> set[str]:
     return keys
 
 
-def build_message_link(chat, message) -> str:
+def build_message_link(chat, message, public_domain: str = "t.me") -> str:
     msg_id = int(getattr(message, "id", 0) or 0)
     username = getattr(chat, "username", None)
+    public_domain = "telegram.me" if str(public_domain or "").strip().lower() == "telegram.me" else "t.me"
 
     topic_id = None
     reply_to = getattr(message, "reply_to", None)
@@ -82,8 +83,8 @@ def build_message_link(chat, message) -> str:
 
     if username:
         if topic_id and int(topic_id) != msg_id:
-            return f"https://telegram.me/{username}/{int(topic_id)}/{msg_id}"
-        return f"https://telegram.me/{username}/{msg_id}"
+            return f"https://{public_domain}/{username}/{int(topic_id)}/{msg_id}"
+        return f"https://{public_domain}/{username}/{msg_id}"
 
     raw_id = str(getattr(chat, "id", "")).strip()
     # Telethon channel entity.id is normally 368..., so t.me/c needs that value.
