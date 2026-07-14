@@ -800,6 +800,7 @@ def regex_test():
             "candidate": details.get("candidate"),
             "usage_notice": details.get("usage_notice"),
             "closed_register_notice": details.get("closed_register_notice"),
+            "registration_success_notice": details.get("registration_success_notice"),
             "code_detected": details.get("code_detected"),
             "code_rule": details.get("code_rule", ""),
             "code_note": details.get("code_note", ""),

@@ -29,6 +29,11 @@ CLOSED_REGISTER_RE = re.compile(
     r")",
     re.I,
 )
+REGISTRATION_SUCCESS_RE = re.compile(
+    r"(?:自由|定时|开放)?注册成功(?=$|\s|[-—:：|，。!！])",
+    re.I,
+)
+REGISTRATION_ACCOUNT_MARKERS = ["创建了", "账号有效期", "到期时间"]
 
 REGEX_META_RE = re.compile(r"[\^\$\[\]\(\)\{\}\?\+\*\\\|]")
 
@@ -176,6 +181,20 @@ def _is_closed_register_notice(normalized: str, compact: str) -> bool:
     return bool(CLOSED_REGISTER_RE.search(normalized) or CLOSED_REGISTER_RE.search(compact))
 
 
+def is_registration_success_notice(text: str) -> bool:
+    return _is_registration_success_notice(normalize_text(text), compact_text(text))
+
+
+def _is_registration_success_notice(normalized: str, compact: str) -> bool:
+    has_success = bool(
+        REGISTRATION_SUCCESS_RE.search(normalized)
+        or REGISTRATION_SUCCESS_RE.search(compact)
+    )
+    if not has_success:
+        return False
+    return any(marker in normalized or marker in compact for marker in REGISTRATION_ACCOUNT_MARKERS)
+
+
 # ---- main matching (optimized) ----
 
 def analyze_message(text: str) -> dict:
@@ -189,6 +208,7 @@ def analyze_message(text: str) -> dict:
             "compact": "",
             "usage_notice": False,
             "closed_register_notice": False,
+            "registration_success_notice": False,
         }
     if len(original) > 8192:
         original = original[:8192]
@@ -197,7 +217,8 @@ def analyze_message(text: str) -> dict:
     compact = compact_text(original)
     usage_notice = _is_usage_notice(normalized, compact)
     closed_register_notice = _is_closed_register_notice(normalized, compact)
-    if usage_notice or closed_register_notice:
+    registration_success_notice = _is_registration_success_notice(normalized, compact)
+    if usage_notice or closed_register_notice or registration_success_notice:
         return {
             "matched": False,
             "rule": "",
@@ -206,6 +227,7 @@ def analyze_message(text: str) -> dict:
             "compact": compact,
             "usage_notice": usage_notice,
             "closed_register_notice": closed_register_notice,
+            "registration_success_notice": registration_success_notice,
         }
 
     rules = _compiled_rules()
@@ -286,6 +308,8 @@ def match_rules(text: str) -> tuple[bool, str]:
         return False, ""
     if _is_closed_register_notice(normalized, compact):
         return False, ""
+    if _is_registration_success_notice(normalized, compact):
+        return False, ""
 
     rules = _compiled_rules()
 
@@ -342,12 +366,13 @@ def match_rule_details(text: str) -> dict:
     compact = compact_text(original)
     usage = _is_usage_notice(normalized, compact)
     closed_register = _is_closed_register_notice(normalized, compact)
+    registration_success = _is_registration_success_notice(normalized, compact)
     code_detail = extract_code_detail(normalized) or extract_code_detail(compact)
 
     if usage:
         return {
             "matched": False, "rule": "", "candidate": "",
-            "usage_notice": True, "closed_register_notice": False,
+            "usage_notice": True, "closed_register_notice": False, "registration_success_notice": False,
             "code_detected": bool(code_detail),
             "code_rule": code_detail.get("name", "") if code_detail else "",
             "code_note": code_detail.get("safe_reason", "") if code_detail else "",
@@ -356,10 +381,19 @@ def match_rule_details(text: str) -> dict:
     if closed_register:
         return {
             "matched": False, "rule": "", "candidate": "",
-            "usage_notice": False, "closed_register_notice": True,
+            "usage_notice": False, "closed_register_notice": True, "registration_success_notice": False,
             "code_detected": bool(code_detail),
             "code_rule": code_detail.get("name", "") if code_detail else "",
             "code_note": "已关闭/暂停注册状态，底层安全过滤，不触发转发",
+            "original": original, "normalized": normalized, "compact": compact,
+        }
+    if registration_success:
+        return {
+            "matched": False, "rule": "", "candidate": "",
+            "usage_notice": False, "closed_register_notice": False, "registration_success_notice": True,
+            "code_detected": bool(code_detail),
+            "code_rule": code_detail.get("name", "") if code_detail else "",
+            "code_note": "个人注册成功通知，底层安全过滤，不触发转发",
             "original": original, "normalized": normalized, "compact": compact,
         }
 
