@@ -82,8 +82,8 @@ def build_message_link(chat, message) -> str:
 
     if username:
         if topic_id and int(topic_id) != msg_id:
-            return f"https://t.me/{username}/{int(topic_id)}/{msg_id}"
-        return f"https://t.me/{username}/{msg_id}"
+            return f"https://telegram.me/{username}/{int(topic_id)}/{msg_id}"
+        return f"https://telegram.me/{username}/{msg_id}"
 
     raw_id = str(getattr(chat, "id", "")).strip()
     # Telethon channel entity.id is normally 368..., so t.me/c needs that value.
