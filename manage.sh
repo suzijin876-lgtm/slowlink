@@ -36,7 +36,10 @@ redis_value() {
 
 show_status() {
   version=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || printf '未知')
+  SLOWLINK_WEB_PORT=$(read_web_port)
   printf '版本：%s\n' "$version"
+  printf '网页端口：%s\n' "$SLOWLINK_WEB_PORT"
+  printf '网页地址：http://服务器IP:%s\n' "$SLOWLINK_WEB_PORT"
   if docker inspect "$APP_CONTAINER" >/dev/null 2>&1; then
     docker inspect "$APP_CONTAINER" --format '应用：{{.State.Status}} / {{if .State.Health}}{{.State.Health.Status}}{{else}}无健康检查{{end}}，重启={{.RestartCount}}，OOM={{.State.OOMKilled}}'
     docker stats --no-stream --format '资源：CPU {{.CPUPerc}}，内存 {{.MemUsage}}' "$APP_CONTAINER" 2>/dev/null || true

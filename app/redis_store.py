@@ -11,6 +11,8 @@ import redis
 from config import REDIS_HOST, REDIS_PORT, LISTENER_WORKERS
 
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=5, socket_keepalive=True, retry_on_timeout=True, health_check_interval=30)
+_TIMEZONE_CACHE = {"ts": None, "value": "Asia/Shanghai"}
+_TIMEZONE_CACHE_TTL = 60.0
 
 LEGACY_PURE_CODE_TRIGGER_RULE = r"^(?!.*码使用)[^-]+-\d+-(?:Register|Renew)_.+$"
 LEGACY_SAFE_PURE_CODE_TRIGGER_RULE = (
@@ -55,16 +57,25 @@ def format_time(ts: int | float | None = None) -> str:
 
     Default is Beijing time so VPS local timezone will not affect the page.
     """
-    try:
-        tz_name = r.get("display_timezone") or "Asia/Shanghai"
-    except Exception:
-        tz_name = "Asia/Shanghai"
+    now = time.monotonic()
+    tz_name = str(_TIMEZONE_CACHE.get("value") or "Asia/Shanghai")
+    cached_ts = _TIMEZONE_CACHE.get("ts")
+    if cached_ts is None or now - float(cached_ts) > _TIMEZONE_CACHE_TTL:
+        try:
+            tz_name = r.get("display_timezone") or "Asia/Shanghai"
+        except Exception:
+            pass
+        _TIMEZONE_CACHE.update({"ts": now, "value": str(tz_name)})
     try:
         tz = ZoneInfo(str(tz_name))
     except Exception:
         tz = ZoneInfo("Asia/Shanghai")
     dt = datetime.fromtimestamp(float(ts if ts is not None else time.time()), tz)
     return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def clear_timezone_cache() -> None:
+    _TIMEZONE_CACHE.update({"ts": None, "value": "Asia/Shanghai"})
 
 
 def get(key: str, default: str | None = None) -> str | None:
@@ -117,10 +128,13 @@ def push_event(kind: str, message: str, extra: dict | None = None, limit: int = 
         "extra": extra or {},
     }
     log_line(kind, message, extra or None)
-    pipe = r.pipeline()
-    pipe.lpush("events", json.dumps(item, ensure_ascii=False))
-    pipe.ltrim("events", 0, limit - 1)
-    pipe.execute()
+    try:
+        pipe = r.pipeline()
+        pipe.lpush("events", json.dumps(item, ensure_ascii=False))
+        pipe.ltrim("events", 0, limit - 1)
+        pipe.execute()
+    except Exception:
+        pass
 
 
 def list_events(limit: int = 50) -> list[dict]:
@@ -158,10 +172,13 @@ def list_perf_events(limit: int = 30) -> list[dict]:
 def add_hit(item: dict, limit: int = 300) -> None:
     item = dict(item)
     item.setdefault("time", format_time())
-    pipe = r.pipeline()
-    pipe.lpush("hits", json.dumps(item, ensure_ascii=False))
-    pipe.ltrim("hits", 0, limit - 1)
-    pipe.execute()
+    try:
+        pipe = r.pipeline()
+        pipe.lpush("hits", json.dumps(item, ensure_ascii=False))
+        pipe.ltrim("hits", 0, limit - 1)
+        pipe.execute()
+    except Exception:
+        pass
 
 
 def list_hits(limit: int = 50) -> list[dict]:
@@ -181,10 +198,13 @@ def add_fail(item: dict, limit: int = 200) -> None:
         log_line("error", f"{item.get('stage', 'fail')}：{item.get('error', item)}", {k: v for k, v in item.items() if k not in {'error'}})
     except Exception:
         pass
-    pipe = r.pipeline()
-    pipe.lpush("fails", json.dumps(item, ensure_ascii=False))
-    pipe.ltrim("fails", 0, limit - 1)
-    pipe.execute()
+    try:
+        pipe = r.pipeline()
+        pipe.lpush("fails", json.dumps(item, ensure_ascii=False))
+        pipe.ltrim("fails", 0, limit - 1)
+        pipe.execute()
+    except Exception:
+        pass
 
 
 def list_fails(limit: int = 50) -> list[dict]:

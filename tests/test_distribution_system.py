@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import subprocess
 import tempfile
+import re
 import unittest
 import zipfile
 from pathlib import Path
@@ -31,7 +32,8 @@ class DistributionSystemTests(unittest.TestCase):
             "get.docker.com",
             "docker compose version",
             "slowlink-watchdog.service",
-            "docker compose up -d --no-deps --build app",
+            'docker compose build "$APP_SERVICE"',
+            'docker compose up -d --no-deps "$APP_SERVICE"',
             "1.安装",
             "2.更新到最新版本",
             "3.卸载",
@@ -63,8 +65,16 @@ class DistributionSystemTests(unittest.TestCase):
             self.assertIn(fragment, text)
 
         guard = install_text.index('validate_release_archive "$FULL_FILE"')
-        copy = install_text.index('copy_release_files "$STAGE"')
-        self.assertLess(guard, copy)
+        transaction_call = install_text.index('apply_release_transaction update', guard)
+        self.assertLess(guard, transaction_call)
+
+        transaction = re.search(
+            r"apply_release_transaction\(\) \{(?P<body>.*?)(?=\n\})",
+            install_text,
+            flags=re.S,
+        )
+        self.assertIsNotNone(transaction)
+        self.assertIn('copy_release_files "$STAGE"', transaction.group("body"))
 
     def test_manage_script_exposes_scoped_commands(self):
         text = self.read_required("manage.sh")

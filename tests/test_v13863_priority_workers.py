@@ -22,8 +22,11 @@ class PriorityWorkersV13863Tests(unittest.TestCase):
         self.assertIn("PRIORITY_WORKER_COUNT = 1", bot_runner)
         self.assertIn("worker_count = max(2, min(4, worker_count))", bot_runner)
         self.assertIn("normal_worker_count = worker_count - PRIORITY_WORKER_COUNT", bot_runner)
-        self.assertIn("self._priority_worker(client, 0)", bot_runner)
-        self.assertIn("self._normal_worker(client, i)", bot_runner)
+        self.assertIn('self._worker_specs = [("retry", 0), ("priority", 0)]', bot_runner)
+        self.assertIn('self._worker_specs += [("normal", i) for i in range(normal_worker_count)]', bot_runner)
+        self.assertIn('elif kind == "priority":', bot_runner)
+        self.assertIn("coro = self._priority_worker(client, worker_id)", bot_runner)
+        self.assertIn("coro = self._normal_worker(client, worker_id)", bot_runner)
         self.assertNotIn("self.workers += [asyncio.create_task(self._worker(client, i))", bot_runner)
 
     def test_priority_worker_blocks_on_priority_queue_directly(self):

@@ -214,7 +214,7 @@ def analyze_message(text: str) -> dict:
         original = original[:8192]
 
     normalized = normalize_text(original)
-    compact = compact_text(original)
+    compact = re.sub(r"\s+", "", normalized)
     usage_notice = _is_usage_notice(normalized, compact)
     closed_register_notice = _is_closed_register_notice(normalized, compact)
     registration_success_notice = _is_registration_success_notice(normalized, compact)
@@ -301,7 +301,7 @@ def match_rules(text: str) -> tuple[bool, str]:
         text = text[:8192]
 
     normalized = normalize_text(text)
-    compact = compact_text(text)
+    compact = re.sub(r"\s+", "", normalized)
 
     # Guards -- pass pre-computed to avoid re-normalization
     if _is_usage_notice(normalized, compact):
@@ -363,7 +363,7 @@ def rule_diagnostics() -> list[dict]:
 def match_rule_details(text: str) -> dict:
     original = (text or "").strip()
     normalized = normalize_text(original)
-    compact = compact_text(original)
+    compact = re.sub(r"\s+", "", normalized)
     usage = _is_usage_notice(normalized, compact)
     closed_register = _is_closed_register_notice(normalized, compact)
     registration_success = _is_registration_success_notice(normalized, compact)

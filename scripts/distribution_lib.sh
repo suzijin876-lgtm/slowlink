@@ -6,8 +6,10 @@ APP_SERVICE="${APP_SERVICE:-app}"
 APP_CONTAINER="${APP_CONTAINER:-slowlink_app}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-slowlink_redis}"
 WATCHDOG_SERVICE="${WATCHDOG_SERVICE:-slowlink-watchdog.service}"
+DEFAULT_WEB_PORT="${DEFAULT_WEB_PORT:-8080}"
 PROTECTED_PATHS='.env data sessions redis_data backups backup watchdog.log'
 PROTECTED_GLOBS='*.session *.session-journal *.sqlite *.sqlite3 *.db *.rdb *.log'
+PROGRAM_PATHS='.dockerignore .env.example .gitattributes .gitignore CHANGELOG.md Dockerfile LICENSE README.md VERSION app docker-compose.yml install.sh manage.sh uninstall.sh ops requirements.txt scripts'
 
 log() {
   printf '[SlowLink] %s\n' "$*"
@@ -37,10 +39,123 @@ check_supported_os() {
 }
 
 install_dependencies() {
+  tools_ready=1
+  for tool_name in curl jq unzip ss; do
+    command -v "$tool_name" >/dev/null 2>&1 || tools_ready=0
+  done
+  if [ "$tools_ready" -eq 1 ] && [ -r /etc/ssl/certs/ca-certificates.crt ]; then
+    log "基础工具已就绪，跳过 APT"
+    return
+  fi
   log "安装基础工具"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq ca-certificates curl jq unzip >/dev/null
+  apt-get install -y -qq ca-certificates curl jq unzip iproute2 >/dev/null
+}
+
+validate_web_port() {
+  web_port_value=${1:-}
+  case "$web_port_value" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$web_port_value" -ge 1 ] 2>/dev/null && [ "$web_port_value" -le 65535 ] 2>/dev/null
+}
+
+read_web_port() {
+  web_port_value=""
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    web_port_value=$(sed -n 's/^[[:space:]]*SLOWLINK_WEB_PORT[[:space:]]*=[[:space:]]*//p' "$INSTALL_DIR/.env" | tail -n 1 | tr -d '[:space:]')
+  fi
+  if ! validate_web_port "$web_port_value"; then
+    web_port_value=$DEFAULT_WEB_PORT
+  fi
+  printf '%s\n' "$web_port_value"
+}
+
+save_web_port() {
+  web_port_value=$1
+  validate_web_port "$web_port_value" || die "网页端口无效：$web_port_value"
+  mkdir -p "$INSTALL_DIR" || die "无法创建安装目录"
+  web_port_tmp=$(mktemp "$INSTALL_DIR/.env.tmp.XXXXXX") || die "无法创建端口配置临时文件"
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    awk '!/^[[:space:]]*SLOWLINK_WEB_PORT[[:space:]]*=/' "$INSTALL_DIR/.env" > "$web_port_tmp" || die "读取现有端口配置失败"
+  fi
+  printf 'SLOWLINK_WEB_PORT=%s\n' "$web_port_value" >> "$web_port_tmp" || die "写入网页端口失败"
+  chmod 600 "$web_port_tmp" || die "设置端口配置权限失败"
+  mv -f "$web_port_tmp" "$INSTALL_DIR/.env" || die "保存网页端口失败"
+}
+
+port_in_use() {
+  web_port_value=$1
+  ss -ltnH 2>/dev/null | awk -v suffix=":$web_port_value" '$4 ~ suffix "$" { found=1 } END { exit(found ? 0 : 1) }'
+}
+
+app_owns_port() {
+  web_port_value=$1
+  docker inspect "$APP_CONTAINER" >/dev/null 2>&1 || return 1
+  docker port "$APP_CONTAINER" 8080/tcp 2>/dev/null | awk -F: -v port="$web_port_value" '$NF == port { found=1 } END { exit(found ? 0 : 1) }'
+}
+
+describe_port_owner() {
+  web_port_value=$1
+  port_owner=$(ss -ltnp 2>/dev/null | awk -v suffix=":$web_port_value" '$4 ~ suffix "$" { print; found=1 } END { if (!found) exit 1 }' | head -n 1 || true)
+  if [ -n "$port_owner" ]; then
+    printf '%s\n' "$port_owner"
+  else
+    printf '未能读取占用进程详情\n'
+  fi
+}
+
+assert_web_port_available() {
+  web_port_value=$1
+  validate_web_port "$web_port_value" || {
+    warn "网页端口无效：$web_port_value"
+    return 1
+  }
+  if port_in_use "$web_port_value" && ! app_owns_port "$web_port_value"; then
+    warn "当前端口已被占用：$web_port_value"
+    warn "占用详情：$(describe_port_owner "$web_port_value")"
+    warn "不会停止占用端口的现有服务，请为 SlowLink 选择其他端口"
+    return 1
+  fi
+  return 0
+}
+
+find_available_port() {
+  web_port_value=${1:-$DEFAULT_WEB_PORT}
+  validate_web_port "$web_port_value" || web_port_value=$DEFAULT_WEB_PORT
+  web_port_limit=$((web_port_value + 1000))
+  [ "$web_port_limit" -le 65535 ] || web_port_limit=65535
+  while [ "$web_port_value" -le "$web_port_limit" ]; do
+    if ! port_in_use "$web_port_value" || app_owns_port "$web_port_value"; then
+      printf '%s\n' "$web_port_value"
+      return 0
+    fi
+    web_port_value=$((web_port_value + 1))
+  done
+  return 1
+}
+
+backup_program_files() {
+  program_backup_dir=$1
+  rm -rf -- "$program_backup_dir" || die "清理程序备份目录失败"
+  mkdir -p "$program_backup_dir" || die "创建程序备份目录失败"
+  for program_path in $PROGRAM_PATHS; do
+    if [ -e "$INSTALL_DIR/$program_path" ]; then
+      cp -a "$INSTALL_DIR/$program_path" "$program_backup_dir/" || die "备份旧程序失败：$program_path"
+    fi
+  done
+}
+
+restore_program_files() {
+  program_backup_dir=$1
+  [ "$INSTALL_DIR" = "/opt/slowlink" ] || die "安装目录安全检查失败"
+  [ -d "$program_backup_dir" ] || die "旧程序备份不存在"
+  for program_path in $PROGRAM_PATHS; do
+    rm -rf -- "$INSTALL_DIR/$program_path" || die "清理失败版本程序文件失败：$program_path"
+  done
+  cp -a "$program_backup_dir"/. "$INSTALL_DIR"/ || die "恢复旧程序失败"
+  find "$INSTALL_DIR/app" -type f -exec touch {} + 2>/dev/null || true
 }
 
 ensure_docker() {
@@ -136,23 +251,37 @@ extract_release_archive() {
 copy_release_files() {
   stage=$1
   [ "$INSTALL_DIR" = "/opt/slowlink" ] || die "安装目录安全检查失败"
-  mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/data/sessions"
-  rm -rf -- "$INSTALL_DIR/app"
+  mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/data/sessions" || die "创建安装目录失败"
+  rm -rf -- "$INSTALL_DIR/app" || die "清理旧应用目录失败"
   cp -a "$stage"/. "$INSTALL_DIR"/ || die "复制程序文件失败"
-  find "$INSTALL_DIR/app" -type f -exec touch {} +
-  mkdir -p "$INSTALL_DIR/data/sessions"
-  chmod 755 "$INSTALL_DIR/install.sh" "$INSTALL_DIR/manage.sh" "$INSTALL_DIR/uninstall.sh"
-  chmod 755 "$INSTALL_DIR/scripts/distribution_lib.sh" "$INSTALL_DIR/ops/slowlink_watchdog.sh"
+  find "$INSTALL_DIR/app" -type f -exec touch {} + || die "刷新应用构建时间失败"
+  mkdir -p "$INSTALL_DIR/data/sessions" || die "创建 Session 目录失败"
+  chmod 755 "$INSTALL_DIR/install.sh" "$INSTALL_DIR/manage.sh" "$INSTALL_DIR/uninstall.sh" || die "设置管理脚本权限失败"
+  chmod 755 "$INSTALL_DIR/scripts/distribution_lib.sh" "$INSTALL_DIR/ops/slowlink_watchdog.sh" || die "设置运维脚本权限失败"
   if [ -f "$INSTALL_DIR/.env" ]; then
-    chmod 600 "$INSTALL_DIR/.env"
+    chmod 600 "$INSTALL_DIR/.env" || die "设置配置文件权限失败"
   fi
 }
 
 install_watchdog() {
-  install -m 644 "$INSTALL_DIR/ops/slowlink-watchdog.service" "/etc/systemd/system/$WATCHDOG_SERVICE"
-  systemctl daemon-reload
+  install -m 644 "$INSTALL_DIR/ops/slowlink-watchdog.service" "/etc/systemd/system/$WATCHDOG_SERVICE" || die "CPU watchdog 服务文件安装失败"
+  systemctl daemon-reload || die "systemd 配置刷新失败"
   systemctl enable "$WATCHDOG_SERVICE" >/dev/null 2>&1 || die "CPU watchdog 启用失败"
   systemctl restart "$WATCHDOG_SERVICE" >/dev/null 2>&1 || die "CPU watchdog 启动失败"
+}
+
+wait_for_redis_health() {
+  timeout_seconds=${1:-60}
+  waited=0
+  while [ "$waited" -lt "$timeout_seconds" ]; do
+    state=$(docker inspect "$REDIS_CONTAINER" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)
+    if [ "$state" = "healthy" ]; then
+      return 0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  return 1
 }
 
 wait_for_app_health() {
@@ -182,6 +311,15 @@ show_diagnostics() {
   docker logs --tail 120 "$APP_CONTAINER" 2>&1 >&2 || true
 }
 
+verify_installation() {
+  web_port_value=$(read_web_port)
+  verify_container_version || return 1
+  docker exec "$REDIS_CONTAINER" redis-cli --raw PING 2>/dev/null | grep -qx PONG || return 1
+  curl -fsS "http://127.0.0.1:$web_port_value/health" 2>/dev/null | grep -q '"status":"ok"' || return 1
+  [ "$(systemctl is-active "$WATCHDOG_SERVICE" 2>/dev/null || true)" = "active" ] || return 1
+  return 0
+}
+
 deploy_application() {
   deploy_mode=$1
   cd "$INSTALL_DIR"
@@ -189,8 +327,19 @@ deploy_application() {
     log "启动 Redis"
     docker compose up -d redis || die "Redis 启动失败"
   fi
-  log "构建并启动 slowlink_app"
-  docker compose up -d --no-deps --build app || die "slowlink_app 构建或启动失败"
+  if ! wait_for_redis_health 60; then
+    show_diagnostics
+    die "Redis 在 60 秒内未通过健康检查"
+  fi
+  web_port_value=$(read_web_port)
+  assert_web_port_available "$web_port_value" || die "网页端口预检失败"
+  log "构建 slowlink_app 镜像"
+  docker compose build "$APP_SERVICE" || die "slowlink_app 镜像构建失败"
+  log "启动 slowlink_app 容器"
+  docker compose up -d --no-deps "$APP_SERVICE" || {
+    show_diagnostics
+    die "slowlink_app 容器启动失败"
+  }
   if ! wait_for_app_health 90; then
     show_diagnostics
     die "slowlink_app 在 90 秒内未通过健康检查"
@@ -198,8 +347,8 @@ deploy_application() {
   if ! verify_container_version; then
     warn "容器版本与发布版本不一致，刷新构建上下文并无缓存重建一次"
     find "$INSTALL_DIR/app" -type f -exec touch {} +
-    docker compose build --no-cache app || die "slowlink_app 无缓存重建失败"
-    docker compose up -d --no-deps app || die "slowlink_app 无缓存重建后启动失败"
+    docker compose build --no-cache "$APP_SERVICE" || die "slowlink_app 无缓存重建失败"
+    docker compose up -d --no-deps "$APP_SERVICE" || die "slowlink_app 无缓存重建后启动失败"
     if ! wait_for_app_health 90; then
       show_diagnostics
       die "slowlink_app 无缓存重建后未通过健康检查"

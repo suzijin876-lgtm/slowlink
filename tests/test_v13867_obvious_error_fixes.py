@@ -84,6 +84,7 @@ class ObviousErrorFixesV13867Tests(unittest.TestCase):
         }
 
         fake_redis_store = types.ModuleType("redis_store")
+        fake_redis_store.clear_timezone_cache = lambda: None
         fake_redis_store.ACTIVE_DEDUP_PATTERNS = []
         fake_redis_store.DEDUP_META_PATTERNS = []
         fake_redis_store.r = types.SimpleNamespace()

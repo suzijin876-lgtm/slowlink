@@ -20,7 +20,7 @@ from link_builder import (
 )
 from matcher import analyze_message, get_text
 from code_rules import extract_code_detail
-from redis_store import add_fail, add_hit, add_perf_event, cleanup_expired_dedup_keys, format_time, get, get_json, log_line, push_event, r, set_value, sha, smembers
+from redis_store import add_fail, add_hit, add_perf_event, format_time, get, get_json, log_line, push_event, r, set_value, sha, smembers
 import json as _json
 from telegram_session_lock import SESSION_LOCK
 
@@ -43,6 +43,9 @@ class BotManager:
         self.entity_cache = {}
         self.queue: Optional[asyncio.Queue] = None
         self.workers = []
+        self._worker_specs = []
+        self._active_jobs = 0
+        self._reconnect_in_progress = False
         self._set_cache = {}
         self._target_entity_cache = {}
         self._source_cache = {}
@@ -242,12 +245,58 @@ class BotManager:
     def is_running(self) -> bool:
         return bool(self.thread and self.thread.is_alive())
 
+    def worker_status(self) -> dict:
+        expected = len(self._worker_specs)
+        alive = sum(1 for task in self.workers if task and not task.done())
+        failed = sum(1 for task in self.workers if task and task.done() and not task.cancelled())
+        return {
+            "expected": expected,
+            "alive": alive,
+            "failed": failed,
+            "active_jobs": self._active_jobs,
+            "reconnecting": self._reconnect_in_progress,
+        }
+
+    async def _wait_for_reconnect(self) -> None:
+        while self._reconnect_in_progress:
+            await asyncio.sleep(0.05)
+
+    def _create_worker_task(self, client: TelegramClient, spec: tuple[str, int]) -> asyncio.Task:
+        kind, worker_id = spec
+        if kind == "retry":
+            coro = self._retry_failed_queue(client)
+        elif kind == "priority":
+            coro = self._priority_worker(client, worker_id)
+        else:
+            coro = self._normal_worker(client, worker_id)
+        return asyncio.create_task(coro, name=f"slowlink-{kind}-{worker_id}")
+
+    def _ensure_workers(self, client: TelegramClient) -> None:
+        if not self._worker_specs:
+            return
+        current = list(self.workers)
+        rebuilt = []
+        for index, spec in enumerate(self._worker_specs):
+            task = current[index] if index < len(current) else None
+            if task is None or task.done():
+                if task is not None and not task.cancelled():
+                    try:
+                        error = task.exception()
+                    except Exception as e:
+                        error = e
+                    if error:
+                        log_line("error", f"工作线程异常退出，正在补建：{spec[0]}-{spec[1]}：{error}")
+                task = self._create_worker_task(client, spec)
+            rebuilt.append(task)
+        self.workers = rebuilt
+
     def start(self) -> str:
         with self.lock:
             if self.is_running():
                 set_value("bot_status", "running")
                 return "监听已经在运行"
             self.started_ok = False
+            self._reconnect_in_progress = False
             self.thread = threading.Thread(target=self._thread_main, daemon=True, name="slowlink-listener")
             self.thread.start()
             self._verbose_log("info", "监听线程已创建，等待 Telegram 连接")
@@ -353,9 +402,9 @@ class BotManager:
             worker_count = LISTENER_WORKERS
         worker_count = max(2, min(4, worker_count))
         normal_worker_count = worker_count - PRIORITY_WORKER_COUNT
-        self.workers = [asyncio.create_task(self._retry_failed_queue(client))]
-        self.workers += [asyncio.create_task(self._priority_worker(client, 0))]
-        self.workers += [asyncio.create_task(self._normal_worker(client, i)) for i in range(normal_worker_count)]
+        self._worker_specs = [("retry", 0), ("priority", 0)]
+        self._worker_specs += [("normal", i) for i in range(normal_worker_count)]
+        self.workers = [self._create_worker_task(client, spec) for spec in self._worker_specs]
         self._verbose_log("info", f"消息处理线程已启动：优先 {PRIORITY_WORKER_COUNT}，普通 {normal_worker_count}")
 
         @client.on(events.NewMessage(incoming=True, func=self._fast_event_filter))
@@ -431,11 +480,12 @@ class BotManager:
             if self._monitor_filter_dirty or monotonic_now - self._monitor_filter_refresh_ts >= 60:
                 self._refresh_monitor_peer_filter()
             self._publish_flow_stats(monotonic_now)
+            self._ensure_workers(client)
             # Proactive reconnect every 2h to keep connection fresh with less churn.
             if now - self._last_delay_reconnect_ts >= 7200 and not self._reconnect_requested and self._telegram_delay_high_count == 0:
                 q = self.queue.qsize() if self.queue else 0
                 pq = self.priority_queue.qsize() if self.priority_queue else 0
-                if q == 0 and pq == 0:
+                if q == 0 and pq == 0 and self._active_jobs == 0:
                     self._reconnect_requested = True
                     self._reconnect_reason = "_proactive_"
             # No message for 30 min -> reconnect.
@@ -459,7 +509,14 @@ class BotManager:
                 pq = self.priority_queue.qsize() if self.priority_queue else 0
                 log_line("info", f"监听心跳正常，普通队列 {q}，优先队列 {pq}")
             if self._reconnect_requested:
-                await self._reconnect_listener_client(client)
+                self._reconnect_in_progress = True
+                try:
+                    while self._active_jobs > 0 and self.stop_event and not self.stop_event.is_set():
+                        await asyncio.sleep(0.05)
+                    if self.stop_event and not self.stop_event.is_set():
+                        await self._reconnect_listener_client(client)
+                finally:
+                    self._reconnect_in_progress = False
             await asyncio.sleep(2)
 
         if not client.is_connected() and self.stop_event and not self.stop_event.is_set():
@@ -471,6 +528,7 @@ class BotManager:
         if self.workers:
             await asyncio.gather(*self.workers, return_exceptions=True)
         self.workers = []
+        self._worker_specs = []
         self.queue = None
         self.priority_queue = None
 
@@ -576,13 +634,6 @@ class BotManager:
             now = int(time.time())
             set_value("listener_heartbeat_ts", str(now))
             self._telegram_delay_high_count = 0
-            if proactive:
-                try:
-                    cleaned = cleanup_expired_dedup_keys()
-                    if cleaned:
-                        log_line("info", f"清理了 {cleaned} 个过期去重 key")
-                except Exception:
-                    pass
             if not proactive:
                 push_event("success", "轻量重连完成，复用已有缓存")
         except Exception as e:
@@ -595,7 +646,10 @@ class BotManager:
                 if not self.priority_queue:
                     await asyncio.sleep(0.1)
                     continue
+                await self._wait_for_reconnect()
                 item = await self.priority_queue.get()
+                await self._wait_for_reconnect()
+                self._active_jobs += 1
                 try:
                     if isinstance(item, dict):
                         meta = item
@@ -604,6 +658,7 @@ class BotManager:
                     else:
                         await self._handle_message(client, item, {"queue_type": "priority"})
                 finally:
+                    self._active_jobs = max(0, self._active_jobs - 1)
                     self.priority_queue.task_done()
             except asyncio.CancelledError:
                 break
@@ -617,7 +672,10 @@ class BotManager:
                 if not self.queue:
                     await asyncio.sleep(0.1)
                     continue
+                await self._wait_for_reconnect()
                 item = await self.queue.get()
+                await self._wait_for_reconnect()
+                self._active_jobs += 1
                 try:
                     if isinstance(item, dict):
                         meta = item
@@ -626,6 +684,7 @@ class BotManager:
                     else:
                         await self._handle_message(client, item, {"queue_type": "normal"})
                 finally:
+                    self._active_jobs = max(0, self._active_jobs - 1)
                     self.queue.task_done()
             except asyncio.CancelledError:
                 break
@@ -656,9 +715,6 @@ class BotManager:
             "queue_wait_ms": queue_wait_ms,
             "telegram_delay_sec": round(telegram_delay_sec, 3),
             "queue_type": queue_type,
-            "message_time": format_time(message_ts) if message_ts else "",
-            "receive_time": format_time(receive_ts),
-            "process_time": format_time(process_ts),
         }
         try:
             try:
@@ -683,6 +739,11 @@ class BotManager:
             if not matched:
                 return
             self._flow_counters["matched"] += 1
+            perf.update({
+                "message_time": format_time(message_ts) if message_ts else "",
+                "receive_time": format_time(receive_ts),
+                "process_time": format_time(process_ts),
+            })
             code_detail = analysis.get("code_detail") or {}
             source_name = self._source_name(chat)
 
@@ -910,13 +971,18 @@ class BotManager:
     async def _retry_failed_queue(self, client: TelegramClient):
         while not self.stop_event.is_set():
             try:
+                await self._wait_for_reconnect()
                 # Atomic pop + send: _send_with_retry already re-queues on failure
                 # (FloodWait handler does r.lpush). Do NOT push back here
                 # to avoid double-queue (same message forwarded twice).
                 raw = r.rpop("failed_queue")
                 if raw:
                     item = _json.loads(raw)
-                    await self._send_with_retry(client, str(item.get("target","")), str(item.get("text","")), 2)
+                    self._active_jobs += 1
+                    try:
+                        await self._send_with_retry(client, str(item.get("target","")), str(item.get("text","")), 2)
+                    finally:
+                        self._active_jobs = max(0, self._active_jobs - 1)
             except asyncio.CancelledError:
                 break
             except Exception:

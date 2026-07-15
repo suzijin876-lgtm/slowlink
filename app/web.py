@@ -18,6 +18,7 @@ from code_rules import add_code_rule, code_rule_diagnostics, delete_code_rule, g
 from redis_store import (
     add_fail,
     cache_stats,
+    clear_timezone_cache,
     delete,
     delete_pattern,
     ACTIVE_DEDUP_PATTERNS,
@@ -406,8 +407,62 @@ def index():
 
 @app.route("/health")
 def health():
-    """Docker healthcheck endpoint. Returns 200 with version info."""
-    return jsonify({"status": "ok", "version": APP_VERSION})
+    """Check the web process, Redis, listener intent, and message workers."""
+    try:
+        redis_ok = bool(r.ping())
+    except Exception:
+        redis_ok = False
+    try:
+        desired = get("listener_desired_state", "stopped") or "stopped"
+        raw_heartbeat = get("listener_heartbeat_ts", "") or ""
+    except Exception:
+        desired = "unknown"
+        raw_heartbeat = ""
+    listener_running = manager.is_running()
+    workers = manager.worker_status()
+    workers_ok = workers["expected"] > 0 and workers["alive"] == workers["expected"]
+    try:
+        client_connected = bool(manager.client and manager.client.is_connected())
+    except Exception:
+        client_connected = False
+    try:
+        heartbeat_ts = int(float(raw_heartbeat)) if str(raw_heartbeat).strip() else 0
+    except Exception:
+        heartbeat_ts = 0
+    heartbeat_age = max(0, int(time.time()) - heartbeat_ts) if heartbeat_ts else None
+    heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= 300
+    listener_ready = (
+        listener_running
+        and manager.started_ok
+        and workers_ok
+        and client_connected
+        and heartbeat_fresh
+    )
+    if desired == "running":
+        listener_ok = listener_ready
+    elif desired == "stopped":
+        listener_ok = (
+            not listener_running
+            and not manager.started_ok
+            and not client_connected
+            and workers["alive"] == 0
+            and workers["active_jobs"] == 0
+        )
+    else:
+        listener_ok = False
+    ok = redis_ok and listener_ok
+    payload = {
+        "status": "ok" if ok else "degraded",
+        "version": APP_VERSION,
+        "redis": redis_ok,
+        "listener_desired_state": desired,
+        "listener_running": listener_running,
+        "listener_ready": listener_ready,
+        "client_connected": client_connected,
+        "heartbeat_age": heartbeat_age,
+        "workers": workers,
+    }
+    return jsonify(payload), 200 if ok else 503
 
 
 @app.get("/api/state")
@@ -900,6 +955,7 @@ def save_display():
     if tz not in allowed:
         tz = "Asia/Shanghai"
     set_value("display_timezone", tz)
+    clear_timezone_cache()
     return done("显示时间设置已保存", "success")
 
 
@@ -1020,6 +1076,7 @@ def import_config():
             ui = payload.get("ui") or {}
             if isinstance(ui, dict) and ui.get("display_timezone"):
                 set_value("display_timezone", str(ui.get("display_timezone") or "Asia/Shanghai"))
+                clear_timezone_cache()
                 imported.append("显示设置")
         try:
             manager.clear_runtime_cache()

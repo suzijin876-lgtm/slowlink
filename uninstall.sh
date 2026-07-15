@@ -22,8 +22,8 @@ fi
 if [ "$PURGE" -eq 1 ]; then
   cat > /dev/tty <<'EOF'
 警告：此操作会删除 SlowLink 程序、配置、Telegram Session、Redis 数据和数据库。
-请输入 PURGE 确认彻底删除：
 EOF
+  printf '请输入 PURGE 确认：' > /dev/tty
   answer=""
   IFS= read -r answer < /dev/tty || answer=""
   [ "$answer" = "PURGE" ] || {

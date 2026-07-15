@@ -30,6 +30,15 @@ curl -fsSL https://raw.githubusercontent.com/suzijin876-lgtm/slowlink/main/insta
 http://服务器地址:8080
 ```
 
+菜单安装时可以直接输入网页端口，默认使用 `8080`。如果该端口已被其他程序占用，安装器会显示占用详情并推荐空闲端口，不会停止现有服务。非交互安装可以指定端口：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/suzijin876-lgtm/slowlink/main/install.sh -o /tmp/slowlink-install.sh
+sudo sh /tmp/slowlink-install.sh --port 18080
+```
+
+端口保存在 `/opt/slowlink/.env` 的 `SLOWLINK_WEB_PORT` 中，后续更新会继续沿用。
+
 在网页中登录 Telegram、配置监听来源、转发目标和识别规则即可开始监听。
 
 ## 主要功能
