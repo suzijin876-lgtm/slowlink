@@ -383,6 +383,10 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
     compiled_rules = _compiled_rules()
     direct_whitelist = _extract_whitelist_code(raw)
     if direct_whitelist:
+        # Whitelist is an extraction/dedup format only. The main matcher must
+        # hit a configured regex or keyword before this detail can be used.
+        if trigger_only:
+            return {}
         direct_rule = {
             "name": "Whitelist 完整码",
             "pattern": WHITELIST_RE.pattern,
@@ -392,7 +396,6 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
         }
         safe, safe_reason = _is_safe_code_context(raw, direct_whitelist, direct_rule)
         if not safe_only or safe:
-            can_trigger = safe and (trigger_only or bool(direct_rule.get("trigger", False)))
             return {
                 "index": -1,
                 "name": direct_rule["name"],
@@ -400,8 +403,8 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
                 "code": direct_whitelist,
                 "identity": _canonical_code_identity(direct_whitelist, direct_rule, raw),
                 "fast": True,
-                "trigger": bool(trigger_only),
-                "can_trigger": can_trigger,
+                "trigger": False,
+                "can_trigger": False,
                 "strict_context": False,
                 "safe": safe,
                 "safe_reason": safe_reason,

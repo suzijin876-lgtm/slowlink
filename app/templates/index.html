@@ -184,20 +184,20 @@
         <div class="code-safe-hero">
           <div>
             <b>强格式保护已开启</b>
-            <p>完整 Register / Renew / Whitelist 强格式码可直接触发；其它码仍需先命中正则或关键词，只用于准确去重。</p>
+            <p>完整 Register / Renew 强格式码可直接触发；Whitelist 十位完整码需先命中正则，再用于准确去重。</p>
           </div>
           <div class="safe-pill">强码可触发</div>
         </div>
         <div class="code-safe-grid">
           <div>✓ Register / Renew 完整码</div>
-          <div>✓ Whitelist 十位完整码</div>
+          <div>✓ Whitelist 十位完整码需先命中正则</div>
           <div>✓ 邀请码 / 注册码字段</div>
           <div>✓ 注册链接 code 参数</div>
           <div>✓ 同一个完整码跨群只发一次</div>
         </div>
         <details class="advanced-box code-advanced">
           <summary>高级码规则设置</summary>
-          <p class="hint">看不懂可以不动。这里只给以后新增特殊码格式用；除完整 Register / Renew / Whitelist 强格式外，转不转发仍然主要看“正则规则”。</p>
+          <p class="hint">看不懂可以不动。这里只给以后新增特殊码格式用；除完整 Register / Renew 强格式外，转不转发仍然主要看“正则规则”。</p>
           <form action="/add_code_rule" method="post" class="code-rule-form" data-ajax="1">
             <input name="name" placeholder="规则名称，例如 VIP 邀请码">
             <input name="pattern" placeholder="识别正则，例如 VIP-[A-Za-z0-9-]+">

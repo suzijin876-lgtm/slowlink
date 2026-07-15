@@ -9,13 +9,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
 SAMPLE = "WindMoon-Whitelist_1OTb0O0FMO"
+WHITELIST_MAIN_RULE = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`\-:：，,]+(?:-[^\s*`\-:：，,]+)*-"
+    r"Whitelist_(?a:[A-Za-z0-9]{10})"
+    r"(?=$|\s|[，。！？？；：、）】]|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
+)
 
 
-def inspect_with_empty_main_rules(text: str) -> dict:
+def inspect_message(text: str, regex_rules=()) -> dict:
     fake_store = types.ModuleType("redis_store")
     fake_store.get_json = lambda key, default=None: default
     fake_store.set_json = lambda *args, **kwargs: None
-    fake_store.smembers = lambda key: set()
+    fake_store.smembers = lambda key: set(regex_rules) if key == "regex_rules" else set()
 
     module_names = ("redis_store", "code_rules", "matcher")
     old_modules = {name: sys.modules.get(name) for name in module_names}
@@ -42,8 +47,12 @@ def inspect_with_empty_main_rules(text: str) -> dict:
                 sys.modules[name] = old
 
 
+def inspect_with_empty_main_rules(text: str) -> dict:
+    return inspect_message(text, ())
+
+
 class WhitelistCodeV13888Tests(unittest.TestCase):
-    def test_exact_ten_character_code_triggers_without_main_rule(self):
+    def test_exact_code_is_identified_but_does_not_trigger_without_main_rule(self):
         result = inspect_with_empty_main_rules(SAMPLE)
 
         self.assertEqual(result["detail"].get("code"), SAMPLE)
@@ -51,19 +60,27 @@ class WhitelistCodeV13888Tests(unittest.TestCase):
             result["detail"].get("identity"),
             "strong_whitelist:" + SAMPLE,
         )
-        self.assertTrue(result["trigger"].get("can_trigger"))
+        self.assertFalse(result["trigger"].get("can_trigger"))
+        self.assertFalse(result["analysis"].get("matched"))
+
+    def test_matching_main_regex_triggers_and_attaches_code_identity(self):
+        result = inspect_message(SAMPLE, (WHITELIST_MAIN_RULE,))
+
         self.assertTrue(result["analysis"].get("matched"))
-        self.assertTrue(
-            str(result["analysis"].get("rule") or "").startswith("code_trigger:")
+        self.assertEqual(result["analysis"].get("rule"), WHITELIST_MAIN_RULE)
+        self.assertEqual(result["analysis"]["code_detail"].get("code"), SAMPLE)
+        self.assertEqual(
+            result["analysis"]["code_detail"].get("identity"),
+            "strong_whitelist:" + SAMPLE,
         )
 
     def test_multi_segment_project_name_and_punctuation_are_supported(self):
         code = "Wind-Moon-Pro-Whitelist_a1B2c3D4e5"
         result = inspect_with_empty_main_rules("领取：" + code + "。")
 
-        self.assertEqual(result["trigger"].get("code"), code)
+        self.assertEqual(result["detail"].get("code"), code)
         self.assertEqual(
-            result["trigger"].get("identity"),
+            result["detail"].get("identity"),
             "strong_whitelist:" + code,
         )
 
@@ -116,14 +133,14 @@ class WhitelistCodeV13888Tests(unittest.TestCase):
     def test_page_documents_builtin_whitelist_protection(self):
         source = (APP / "templates" / "index.html").read_text(encoding="utf-8-sig")
 
-        self.assertIn("Register / Renew / Whitelist", source)
+        self.assertIn("Whitelist 十位完整码需先命中正则", source)
 
-    def test_version_is_v13888(self):
+    def test_version_is_v13889(self):
         version = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
         config = (APP / "config.py").read_text(encoding="utf-8-sig")
 
-        self.assertEqual(version, "1.38.88")
-        self.assertIn('APP_VERSION = "1.38.88"', config)
+        self.assertEqual(version, "1.38.89")
+        self.assertIn('APP_VERSION = "1.38.89"', config)
 
 
 if __name__ == "__main__":
