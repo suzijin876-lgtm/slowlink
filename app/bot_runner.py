@@ -444,7 +444,7 @@ class BotManager:
                 try: raw_text = getattr(event.message, "message", "") or ""
                 except Exception: raw_text = ""
                 low_text = raw_text.lower()
-                is_priority = any(k in low_text for k in ["register", "renew", "抽奖", "开放注册", "自由注册", "开注", "邀请码", "注册码", "已为您生成", "总注册限制", "已注册人数", "剩余可注册", "开启注册", "定时注册"])
+                is_priority = any(k in low_text for k in ["register", "renew", "whitelist", "抽奖", "开放注册", "自由注册", "开注", "邀请码", "注册码", "已为您生成", "总注册限制", "已注册人数", "剩余可注册", "开启注册", "定时注册"])
                 if is_priority and self.priority_queue:
                     self.priority_queue.put_nowait(payload)
                     self._flow_counters["enqueued"] += 1

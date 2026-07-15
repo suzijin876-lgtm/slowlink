@@ -32,6 +32,12 @@ SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
     r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_" + REGISTER_SUFFIX_PATTERN + REGISTER_SUFFIX_BOUNDARY
 )
+WHITELIST_SUFFIX_PATTERN = r"(?a:[A-Za-z0-9]{10})"
+SAFE_WHITELIST_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`\-:：，,]+(?:-[^\s*`\-:：，,]+)*-Whitelist_"
+    + WHITELIST_SUFFIX_PATTERN
+    + REGISTER_SUFFIX_BOUNDARY
+)
 LEGACY_REGISTER_RENEW_PATTERN_MIGRATIONS = {
     LEGACY_SAFE_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
     LEGACY_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
@@ -123,6 +129,7 @@ NEGATIVE_CONTEXT = [
 ]
 
 REGISTER_RENEW_RE = re.compile(SAFE_REGISTER_RENEW_PATTERN, re.I | re.M)
+WHITELIST_RE = re.compile(SAFE_WHITELIST_PATTERN, re.I | re.M)
 MARKDOWN_REGISTER_RENEW_RE = re.compile(
     r"(?:^|[\s:：，,])([^\s*`-]+(?:-[^\s*`-]+)*-\d+(?:-[^\s*`-]+)*-(?:Register|Renew)_)(?:[*`~]+)?("
     + OBFUSCATED_REGISTER_SUFFIX_PATTERN
@@ -282,6 +289,14 @@ def _extract_markdown_register_renew_code(text: str) -> str:
     return ""
 
 
+def _extract_whitelist_code(text: str) -> str:
+    for candidate in [text or "", *(text or "").splitlines()]:
+        match = WHITELIST_RE.search(candidate)
+        if match:
+            return _clean_code_value(match.group(0))
+    return ""
+
+
 def _normalize_text(text: str) -> str:
     return re.sub(r"[\s\u200b\u200c\u200d\ufeff\u2060]+", " ", text or "").strip()
 
@@ -295,7 +310,7 @@ def _is_safe_code_context(text: str, code: str, rule: dict[str, Any]) -> tuple[b
     """判断这次码识别能不能用于完整码去重/极速通道。
 
     重点：不要让验证码、参与码、接口 token、普通链接 code= 混进来。
-    Register/Renew 强格式天然安全；其它宽泛规则必须有注册/邀请上下文。
+    Register/Renew 和固定十位 Whitelist 强格式天然安全；其它宽泛规则必须有注册/邀请上下文。
     """
     raw = _normalize_text(text)
     code = code or ""
@@ -303,6 +318,10 @@ def _is_safe_code_context(text: str, code: str, rule: dict[str, Any]) -> tuple[b
         return False, "疑似不完整 Register/Renew 前缀"
     if REGISTER_RENEW_RE.search(code) or REGISTER_RENEW_RE.search(raw):
         return True, "Register/Renew 强格式"
+    if WHITELIST_RE.search(code) or WHITELIST_RE.search(raw):
+        if _has_any(raw, NEGATIVE_CONTEXT):
+            return False, "Whitelist 码处于关闭或无效上下文"
+        return True, "Whitelist 十位强格式"
 
     if not rule.get("strict_context", True):
         if _has_any(raw, NEGATIVE_CONTEXT):
@@ -343,6 +362,8 @@ def _canonical_code_identity(code: str, rule: dict[str, Any], raw_text: str = ""
     if not value:
         return ""
     compact = re.sub(r"[\s\u200b\u200c\u200d\ufeff\u2060]+", "", value)
+    if WHITELIST_RE.search(compact) or WHITELIST_RE.search(raw_text or ""):
+        return "strong_whitelist:" + compact
     if REGISTER_RENEW_RE.search(compact) or REGISTER_RENEW_RE.search(raw_text or ""):
         # Register/Renew 的随机码可能大小写敏感，保留原始大小写，只清理空白。
         return "strong_register_renew:" + compact
@@ -360,6 +381,31 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
     compact = re.sub(r"[\s\u200b\u200c\u200d\ufeff\u2060]+", "", raw)
     candidates = [raw, compact] if compact != raw else [raw]
     compiled_rules = _compiled_rules()
+    direct_whitelist = _extract_whitelist_code(raw)
+    if direct_whitelist:
+        direct_rule = {
+            "name": "Whitelist 完整码",
+            "pattern": WHITELIST_RE.pattern,
+            "fast": True,
+            "trigger": False,
+            "strict_context": False,
+        }
+        safe, safe_reason = _is_safe_code_context(raw, direct_whitelist, direct_rule)
+        if not safe_only or safe:
+            can_trigger = safe and (trigger_only or bool(direct_rule.get("trigger", False)))
+            return {
+                "index": -1,
+                "name": direct_rule["name"],
+                "pattern": direct_rule["pattern"],
+                "code": direct_whitelist,
+                "identity": _canonical_code_identity(direct_whitelist, direct_rule, raw),
+                "fast": True,
+                "trigger": bool(trigger_only),
+                "can_trigger": can_trigger,
+                "strict_context": False,
+                "safe": safe,
+                "safe_reason": safe_reason,
+            }
     direct_code = _extract_markdown_register_renew_code(raw)
     if direct_code:
         direct_idx, direct_rule = 0, {
