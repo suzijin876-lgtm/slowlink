@@ -1145,7 +1145,6 @@ class BotManager:
                 "type": dtype,
             })
         out.sort(key=lambda x: (x.get("type", ""), x.get("title", "").lower()))
-        push_event("success", f"已刷新监听面板：{len(out)} 个群/频道")
         return out
 
     async def list_dialogs(self, force: bool = False) -> list[dict]:

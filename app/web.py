@@ -669,7 +669,7 @@ def refresh_dialogs():
         new_count = len(dialogs)
         if should_keep_existing_dialog_cache(old_count=old_count, new_count=new_count):
             message = f"刷新结果疑似不完整：旧列表 {old_count} 个，本次只拉到 {new_count} 个。已保留旧列表，请稍后再试。"
-            add_fail({"stage": "refresh_dialogs", "error": message})
+            add_fail({"stage": "refresh_dialogs", "error": message}, emit_log=False)
             push_event("warning", message)
             return done(message, "warning", ok=False)
         set_json("dialog_cache", dialogs)
@@ -685,6 +685,7 @@ def refresh_dialogs():
             manager.clear_runtime_cache()
         except Exception:
             pass
+        push_event("success", msg)
         return done(msg, "success")
     except Exception as e:
         add_fail({"stage": "refresh_dialogs", "error": str(e)})

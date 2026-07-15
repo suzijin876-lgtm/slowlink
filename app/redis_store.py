@@ -191,13 +191,14 @@ def list_hits(limit: int = 50) -> list[dict]:
     return out
 
 
-def add_fail(item: dict, limit: int = 200) -> None:
+def add_fail(item: dict, limit: int = 200, *, emit_log: bool = True) -> None:
     item = dict(item)
     item.setdefault("time", format_time())
-    try:
-        log_line("error", f"{item.get('stage', 'fail')}：{item.get('error', item)}", {k: v for k, v in item.items() if k not in {'error'}})
-    except Exception:
-        pass
+    if emit_log:
+        try:
+            log_line("error", f"{item.get('stage', 'fail')}：{item.get('error', item)}", {k: v for k, v in item.items() if k not in {'error'}})
+        except Exception:
+            pass
     try:
         pipe = r.pipeline()
         pipe.lpush("fails", json.dumps(item, ensure_ascii=False))

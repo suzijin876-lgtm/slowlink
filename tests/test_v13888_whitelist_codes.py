@@ -135,12 +135,11 @@ class WhitelistCodeV13888Tests(unittest.TestCase):
 
         self.assertIn("Whitelist 十位完整码需先命中正则", source)
 
-    def test_version_is_v13889(self):
+    def test_version_sources_are_consistent(self):
         version = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
         config = (APP / "config.py").read_text(encoding="utf-8-sig")
 
-        self.assertEqual(version, "1.38.89")
-        self.assertIn('APP_VERSION = "1.38.89"', config)
+        self.assertIn(f'APP_VERSION = "{version}"', config)
 
 
 if __name__ == "__main__":
