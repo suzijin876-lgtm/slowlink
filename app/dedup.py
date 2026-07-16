@@ -179,6 +179,60 @@ def _extract_numbered_lottery_prizes(raw: str) -> list[str]:
     return sorted(prizes)
 
 
+LOTTERY_SECTION_LABELS = (
+    "截止时间",
+    "奖品",
+    "奖品内容",
+    "发布群组",
+    "参与要求",
+    "口令",
+    "活动详情",
+    "创建者",
+    "发起人",
+    "参与关键词",
+    "定时开奖",
+    "开奖时间",
+)
+
+
+def _extract_lottery_section_values(raw: str, labels: tuple[str, ...]) -> list[str]:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    section_pattern = "|".join(re.escape(label) for label in LOTTERY_SECTION_LABELS)
+    lines = (raw or "").splitlines()
+    for index, line in enumerate(lines):
+        candidate = re.sub(r"^[^\w\u3400-\u9fff]+", "", line.strip())
+        match = re.match(rf"(?:{label_pattern})\s*[:：]\s*(.*?)\s*$", candidate, flags=re.I)
+        if not match:
+            continue
+        inline = _normalize_lottery_identity_value(match.group(1))
+        if inline:
+            return [inline]
+
+        values: list[str] = []
+        for following in lines[index + 1:]:
+            stripped = following.strip()
+            if not stripped:
+                continue
+            next_candidate = re.sub(r"^[^\w\u3400-\u9fff]+", "", stripped)
+            if re.match(rf"(?:{section_pattern})\s*[:：]", next_candidate, flags=re.I):
+                break
+            if re.fullmatch(r"[━─—=\-]+", stripped) or "祝所有参与者好运" in stripped:
+                break
+            value = _normalize_lottery_identity_value(next_candidate)
+            if value:
+                values.append(value)
+        return sorted(set(values))
+    return []
+
+
+def _extract_lottery_title(raw: str) -> str:
+    for line in (raw or "").splitlines():
+        value = _normalize_lottery_identity_value(line)
+        if value and "抽奖活动已开始" not in value and not re.fullmatch(r"[━─—=\-]+", value):
+            return value
+    return ""
+
+
 def extract_lottery_template_identity(text: str, message_link: str = "", source: str = "") -> str:
     """Correlate high-confidence lottery template variants for a short window."""
     raw = unicodedata.normalize("NFKC", text or "")
@@ -191,6 +245,19 @@ def extract_lottery_template_identity(text: str, message_link: str = "", source:
             f"event:creator:{creator}|keyword:{keyword}|draw:{draw_time}"
             f"|prizes:{'|'.join(numbered_prizes)}"
         )
+
+    if "抽奖活动已开始" in raw:
+        title = _extract_lottery_title(raw)
+        deadline = _extract_lottery_line_value(raw, ("截止时间",))
+        prizes = _extract_lottery_section_values(raw, ("奖品", "奖品内容"))
+        publish_groups = _extract_lottery_section_values(raw, ("发布群组",))
+        passphrase = _extract_lottery_line_value(raw, ("口令",))
+        details = _extract_lottery_section_values(raw, ("活动详情",))
+        if title and deadline and prizes and publish_groups and passphrase and details:
+            return (
+                f"deadline:{deadline}|title:{title}|publish:{'|'.join(publish_groups)}"
+                f"|prizes:{'|'.join(prizes)}|passphrase:{passphrase}|details:{'|'.join(details)}"
+            )
 
     if "刮刮乐" not in raw:
         return ""

@@ -60,6 +60,33 @@ SEEDED_MESSAGE = f"""🎫 抽奖 茶话带集联来抽奖咯
 参与要求: 同时在 集邮者联盟 (https://t.me/Petrichor_Embys_chat)、茶话领域 (https://t.me/Jsoo8888)
 """
 
+LEWA_MESSAGE_WITHOUT_REQUIREMENT = """🎉 Levilde Luminia Emby注册码30天*1
+
+🎁 抽奖活动已开始！
+━━━━━━━━━━━━━━
+
+⏰ 截止时间：2026年7月17日 19:59:59
+
+🎁 奖品：
+  ▸ Levilde Luminia Emby (Levilde Luminia Emby注册码30天*1) x5
+
+📣 发布群组：
+  ▸ 乐蛙影视站-群组
+
+🔑 口令：Levilde LuminiaYYDS
+
+📝 活动详情：
+Levilde Luminia Emby注册码30天*1
+
+━━━━━━━━━━━━━━
+🍀 祝所有参与者好运！
+"""
+
+LEWA_MESSAGE_WITH_REQUIREMENT = LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace(
+    "🔑 口令：",
+    "📋 参与要求：\n  ▸ 订阅 乐蛙影视站-群组\n\n🔑 口令：",
+)
+
 
 class FakePipeline:
     def __init__(self, client):
@@ -214,6 +241,96 @@ class CrossTemplateLotteryDedupV13883Tests(unittest.TestCase):
         )
         second_duplicate, _reason, _profile = dedup.check_and_mark(
             another_seed, "https://t.me/b/2", None, "strict", "b"
+        )
+
+        self.assertFalse(first_duplicate)
+        self.assertFalse(second_duplicate)
+
+    def test_optional_participation_requirement_does_not_change_lottery_template_identity(self):
+        dedup, _client = load_dedup()
+
+        original = dedup.build_profile(
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT,
+            "https://t.me/Lewa_movie/390202",
+            "乐蛙影视站-群组",
+        )
+        edited = dedup.build_profile(
+            LEWA_MESSAGE_WITH_REQUIREMENT,
+            "https://t.me/Lewa_movie/390205",
+            "乐蛙影视站-群组",
+        )
+
+        self.assertNotEqual(original["dedup_id"], edited["dedup_id"])
+        self.assertTrue(original["lottery_template_identity"].startswith("deadline:"))
+        self.assertEqual(
+            original["lottery_template_identity"],
+            edited["lottery_template_identity"],
+        )
+
+    def test_edited_requirement_variant_is_blocked_within_template_window(self):
+        dedup, _client = load_dedup()
+
+        first_duplicate, _reason, _profile = dedup.check_and_mark(
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT,
+            "https://t.me/Lewa_movie/390202",
+            None,
+            "strict",
+            "乐蛙影视站-群组",
+        )
+        second_duplicate, reason, _profile = dedup.check_and_mark(
+            LEWA_MESSAGE_WITH_REQUIREMENT,
+            "https://t.me/Lewa_movie/390205",
+            None,
+            "strict",
+            "乐蛙影视站-群组",
+        )
+
+        self.assertFalse(first_duplicate)
+        self.assertTrue(second_duplicate)
+        self.assertEqual(reason, "同一抽奖的不同模板重复（10分钟内）")
+
+    def test_deadline_prize_or_passphrase_change_remains_a_distinct_lottery(self):
+        dedup, _client = load_dedup()
+        original = dedup.build_profile(LEWA_MESSAGE_WITHOUT_REQUIREMENT)
+
+        variants = (
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace("Levilde Luminia Emby注册码30天*1", "新的抽奖活动", 1),
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace("2026年7月17日", "2026年7月18日"),
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace(") x5", ") x6"),
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace("乐蛙影视站-群组", "乐蛙影视站-二群", 1),
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace("LuminiaYYDS", "LuminiaNEW"),
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT.replace(
+                "活动详情：\nLevilde Luminia Emby注册码30天*1",
+                "活动详情：\n新的活动详情",
+            ),
+        )
+
+        self.assertTrue(original["lottery_template_identity"])
+        for variant in variants:
+            with self.subTest(variant=variant):
+                changed = dedup.build_profile(variant)
+                self.assertNotEqual(
+                    original["lottery_template_identity"],
+                    changed["lottery_template_identity"],
+                )
+
+    def test_lewa_template_correlation_expires_after_ten_minutes(self):
+        dedup, client = load_dedup()
+
+        first_duplicate, _reason, _profile = dedup.check_and_mark(
+            LEWA_MESSAGE_WITHOUT_REQUIREMENT,
+            "https://t.me/Lewa_movie/390202",
+            None,
+            "strict",
+            "乐蛙影视站-群组",
+        )
+        client.now += 601
+        second_duplicate, _reason, _profile = dedup.check_and_mark(
+            LEWA_MESSAGE_WITH_REQUIREMENT,
+            "https://t.me/Lewa_movie/390205",
+            None,
+            "strict",
+            "乐蛙影视站-群组",
         )
 
         self.assertFalse(first_duplicate)
