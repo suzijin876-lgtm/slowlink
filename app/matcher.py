@@ -29,6 +29,14 @@ CLOSED_REGISTER_RE = re.compile(
     r")",
     re.I,
 )
+REGISTRATION_STATUS_RE = re.compile(
+    r"(?m)^[^\w\u3400-\u9fff]*注册状态\s*[|｜:：]\s*"
+    r"(?P<state>true|false|on|off|enabled|disabled|1|0|已开启|开启|开放|已关闭|关闭|未开放)"
+    r"(?=$|\s|[•·])",
+    re.I,
+)
+OPEN_REGISTRATION_STATES = {"true", "on", "enabled", "1", "已开启", "开启", "开放"}
+CLOSED_REGISTRATION_STATES = {"false", "off", "disabled", "0", "已关闭", "关闭", "未开放"}
 REGISTRATION_SUCCESS_RE = re.compile(
     r"(?:自由|定时|开放)?注册成功(?=$|\s|[-—:：|，。!！])",
     re.I,
@@ -171,7 +179,22 @@ def is_closed_register_notice(text: str) -> bool:
     return _is_closed_register_notice(normalize_text(text), compact_text(text))
 
 
+def _explicit_registration_status(normalized: str) -> str:
+    match = REGISTRATION_STATUS_RE.search(normalized)
+    if not match:
+        return ""
+    value = match.group("state").strip().lower()
+    if value in OPEN_REGISTRATION_STATES:
+        return "open"
+    if value in CLOSED_REGISTRATION_STATES:
+        return "closed"
+    return ""
+
+
 def _is_closed_register_notice(normalized: str, compact: str) -> bool:
+    if _explicit_registration_status(normalized) == "closed":
+        return True
+
     has_register_marker = any(k in normalized or k in compact for k in [
         "自由注册", "开放注册", "注册开放", "开注", "注册"
     ])
