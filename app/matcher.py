@@ -6,6 +6,7 @@ from code_rules import extract_code_detail, extract_trigger_code_detail
 
 _RULE_CACHE = {"ts": 0.0, "raw": None, "keywords": [], "regexes": []}
 _ANALYZE_CACHE = {"ts": 0.0, "text": None, "result": None}
+_EXCLUDE_TEXT_CACHE = {"ts": 0.0, "raw": None, "items": []}
 
 # ---- pre-compiled guards (unchanged) ----
 
@@ -64,6 +65,25 @@ def compact_text(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _excluded_text_keyword(normalized: str, ttl: float = 60.0) -> str:
+    now = time.monotonic()
+    cached_raw = _EXCLUDE_TEXT_CACHE.get("raw")
+    cached_ts = float(_EXCLUDE_TEXT_CACHE.get("ts") or 0)
+    if cached_raw is None or now - cached_ts > ttl:
+        raw = tuple(sorted(str(value).strip() for value in smembers("exclude_texts") if str(value).strip()))
+        items = []
+        for value in raw:
+            keyword = normalize_text(value).casefold()
+            if keyword:
+                items.append((keyword, value))
+        _EXCLUDE_TEXT_CACHE.update({"ts": now, "raw": raw, "items": items})
+    normalized_folded = normalized.casefold()
+    for keyword, original in _EXCLUDE_TEXT_CACHE.get("items") or []:
+        if keyword in normalized_folded:
+            return original
+    return ""
+
+
 def _split_rule_blob(blob: str) -> list[str]:
     out: list[str] = []
     for part in str(blob or "").split(";;"):
@@ -84,6 +104,7 @@ def invalidate_rule_cache():
     _RULE_CACHE.clear()
     _RULE_CACHE.update({"ts": 0.0, "raw": None, "keywords": [], "regexes": []})
     _ANALYZE_CACHE.update({"ts": 0.0, "text": None, "result": None})
+    _EXCLUDE_TEXT_CACHE.update({"ts": 0.0, "raw": None, "items": []})
 
 
 def _rule_blob_snapshot() -> tuple[str, ...]:
@@ -237,6 +258,20 @@ def analyze_message(text: str) -> dict:
         original = original[:8192]
 
     normalized = normalize_text(original)
+    excluded_keyword = _excluded_text_keyword(normalized)
+    if excluded_keyword:
+        return {
+            "matched": False,
+            "rule": "",
+            "code_detail": {},
+            "normalized": normalized,
+            "compact": re.sub(r"\s+", "", normalized),
+            "excluded_text_notice": True,
+            "excluded_keyword": excluded_keyword,
+            "usage_notice": False,
+            "closed_register_notice": False,
+            "registration_success_notice": False,
+        }
     compact = re.sub(r"\s+", "", normalized)
     usage_notice = _is_usage_notice(normalized, compact)
     closed_register_notice = _is_closed_register_notice(normalized, compact)
@@ -324,6 +359,8 @@ def match_rules(text: str) -> tuple[bool, str]:
         text = text[:8192]
 
     normalized = normalize_text(text)
+    if _excluded_text_keyword(normalized):
+        return False, ""
     compact = re.sub(r"\s+", "", normalized)
 
     # Guards -- pass pre-computed to avoid re-normalization
@@ -386,6 +423,16 @@ def rule_diagnostics() -> list[dict]:
 def match_rule_details(text: str) -> dict:
     original = (text or "").strip()
     normalized = normalize_text(original)
+    excluded_keyword = _excluded_text_keyword(normalized, ttl=0)
+    if excluded_keyword:
+        return {
+            "matched": False, "rule": "", "candidate": "",
+            "excluded_text_notice": True, "excluded_keyword": excluded_keyword,
+            "usage_notice": False, "closed_register_notice": False, "registration_success_notice": False,
+            "code_detected": False, "code_rule": "", "code_note": "",
+            "original": original, "normalized": normalized,
+            "compact": re.sub(r"\s+", "", normalized),
+        }
     compact = re.sub(r"\s+", "", normalized)
     usage = _is_usage_notice(normalized, compact)
     closed_register = _is_closed_register_notice(normalized, compact)

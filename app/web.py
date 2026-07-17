@@ -297,6 +297,7 @@ def _state_payload(light: bool = False) -> dict:
         "stats": stats,
         "monitor_chats": sorted(smembers("monitor_chats")),
         "exclude_chats": sorted(smembers("exclude_chats")),
+        "exclude_texts": sorted(smembers("exclude_texts")),
         "regex_rules": sorted(smembers("regex_rules")),
         "code_rules": code_rule_diagnostics(),
         "events": list_events(30),
@@ -328,6 +329,7 @@ def _page_data() -> dict:
         "dialog_cache": dialogs,
         "dialog_stats": _dialog_stats(dialogs),
         "exclude_chats": sorted(smembers("exclude_chats")),
+        "exclude_texts": sorted(smembers("exclude_texts")),
         "regex_rules": sorted(smembers("regex_rules")),
         "code_rules": code_rule_diagnostics(),
         "dedup_enabled": get("dedup_enabled", "1") == "1",
@@ -728,6 +730,22 @@ def del_exclude():
     return _del_set("exclude_chats")
 
 
+@app.post("/add_exclude_text")
+def add_exclude_text():
+    gate = require_login()
+    if gate:
+        return gate
+    return _add_set("exclude_texts", "value", "排除文本已添加")
+
+
+@app.post("/del_exclude_text")
+def del_exclude_text():
+    gate = require_login()
+    if gate:
+        return gate
+    return _del_set("exclude_texts")
+
+
 @app.post("/add_regex")
 def add_regex():
     gate = require_login()
@@ -882,6 +900,8 @@ def regex_test():
             "usage_notice": details.get("usage_notice"),
             "closed_register_notice": details.get("closed_register_notice"),
             "registration_success_notice": details.get("registration_success_notice"),
+            "excluded_text_notice": details.get("excluded_text_notice"),
+            "excluded_keyword": details.get("excluded_keyword", ""),
             "code_detected": details.get("code_detected"),
             "code_rule": details.get("code_rule", ""),
             "code_note": details.get("code_note", ""),
@@ -927,6 +947,8 @@ def precheck():
         add("监听列表", bool(monitors), f"{len(monitors)} 个")
         rules = smembers("regex_rules")
         add("正则规则", bool(rules), f"{len(rules)} 条原始规则")
+        excluded_texts = smembers("exclude_texts")
+        add("排除文本", True, f"{len(excluded_texts)} 条")
         diagnostics = rule_diagnostics()
         invalid = [x for x in diagnostics if not x.get("ok")]
         add("正则编译", not invalid, "全部正常" if not invalid else f"{len(invalid)} 条异常")
@@ -980,6 +1002,7 @@ def export_config():
         "public_link_domain": _public_link_domain(),
         "monitor_chats": sorted(smembers("monitor_chats")),
         "exclude_chats": sorted(smembers("exclude_chats")),
+        "exclude_texts": sorted(smembers("exclude_texts")),
         "regex_rules": sorted(smembers("regex_rules")),
         "code_rules": get_code_rules(),
         "dedup": {
@@ -1024,7 +1047,7 @@ def import_config():
         if not isinstance(payload, dict):
             raise ValueError("备份文件格式不正确")
         imported = []
-        regex_rules_changed = False
+        matcher_rules_changed = False
         if mode != "rules_only" and "target_chat" in payload:
             set_value("target_chat", str(payload.get("target_chat") or ""))
             imported.append("转发目标")
@@ -1036,6 +1059,7 @@ def import_config():
         set_items = [
             ("monitor_chats", "monitor_chats", "监听列表"),
             ("exclude_chats", "exclude_chats", "排除列表"),
+            ("exclude_texts", "exclude_texts", "排除文本"),
             ("regex_rules", "regex_rules", "正则规则"),
         ]
         for redis_key, json_key, label in set_items:
@@ -1046,12 +1070,12 @@ def import_config():
                 for item in items:
                     sadd(redis_key, str(item))
                 imported.append(label)
-                if redis_key == "regex_rules":
-                    regex_rules_changed = True
+                if redis_key in {"exclude_texts", "regex_rules"}:
+                    matcher_rules_changed = True
         if mode != "rules_only" and isinstance(payload.get("code_rules"), list):
             save_code_rules(payload.get("code_rules") or [])
             imported.append("码识别规则")
-        if regex_rules_changed:
+        if matcher_rules_changed:
             invalidate_rule_cache()
         if mode != "rules_only":
             d = payload.get("dedup") or {}

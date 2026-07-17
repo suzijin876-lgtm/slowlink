@@ -169,6 +169,7 @@
   <div class="tab-shell grouped-tabs" data-tabs="ruleset">
     <div class="tab-nav">
       <button type="button" class="tab-btn active" data-tab="rules">正则规则</button>
+      <button type="button" class="tab-btn" data-tab="exclude-texts">排除文本</button>
       <button type="button" class="tab-btn" data-tab="codes">码识别</button>
       <button type="button" class="tab-btn" data-tab="dedup">去重设置</button>
     </div>
@@ -178,6 +179,12 @@
         <form action="/add_regex" method="post" class="row" data-ajax="1"><input name="value" placeholder="可以粘贴单条规则，也可以用 ;; 批量分隔"><button>添加</button></form>
         <p class="hint">轻量过滤，排除群优先；码格式不要写死在正则里，可到“码识别”里配置。</p>
         <div class="collapse-box open-lite"><div class="summary-lite">当前正则规则：<span id="regexCount">{{ regex_rules|length }}</span> 条</div><div class="compact-list rule-list" id="regexList"></div></div>
+      </div>
+      <div class="tab-panel" data-panel="exclude-texts">
+        <h3>排除文本</h3>
+        <form action="/add_exclude_text" method="post" class="row" data-ajax="1"><input name="value" placeholder="输入关键词，消息包含它就不转发"><button>添加</button></form>
+        <p class="hint">不区分英文大小写；命中任意一条后直接排除，优先于正则和码识别。</p>
+        <div class="collapse-box open-lite"><div class="summary-lite">当前排除文本：<span id="excludeTextCount">{{ exclude_texts|length }}</span> 条</div><div class="compact-list" id="excludeTextList"></div></div>
       </div>
       <div class="tab-panel" data-panel="codes">
         <h3>码识别</h3>
@@ -267,9 +274,9 @@
         <h3>备份恢复</h3>
         <div class="two-col">
           <div class="backup-box"><h4>导出</h4><p class="hint">点击后直接下载 JSON 备份文件。</p><a class="button-link" href="/export_config">下载配置备份</a></div>
-          <div class="backup-box"><h4>导入</h4><form action="/import_config" method="post" enctype="multipart/form-data" class="stack" data-ajax="1"><input type="file" name="backup_file" accept="application/json,.json"><label>导入方式<select name="mode"><option value="overwrite">覆盖当前配置</option><option value="merge">合并到当前配置</option><option value="rules_only">只导入监听 / 排除 / 正则</option></select></label><button class="warning">导入备份文件</button></form></div>
+          <div class="backup-box"><h4>导入</h4><form action="/import_config" method="post" enctype="multipart/form-data" class="stack" data-ajax="1"><input type="file" name="backup_file" accept="application/json,.json"><label>导入方式<select name="mode"><option value="overwrite">覆盖当前配置</option><option value="merge">合并到当前配置</option><option value="rules_only">只导入监听 / 排除会话 / 排除文本 / 正则</option></select></label><button class="warning">导入备份文件</button></form></div>
         </div>
-        <p class="hint">备份包含监听、排除、正则、转发目标、去重设置；不包含后台密码、API_HASH、Telegram session、去重缓存。</p>
+        <p class="hint">备份包含监听、排除会话、排除文本、正则、转发目标、去重设置；不包含后台密码、API_HASH、Telegram session、去重缓存。</p>
       </div>
     </div>
   </div>
@@ -578,6 +585,7 @@ function renderCodeRules(items){
 function renderLists(data){
   renderSetList('monitorList','monitorCount',data.monitor_chats || [],'/del_monitor');
   renderSetList('excludeList','excludeCount',data.exclude_chats || [],'/del_exclude');
+  renderSetList('excludeTextList','excludeTextCount',data.exclude_texts || [],'/del_exclude_text');
   renderSetList('regexList','regexCount',data.regex_rules || [],'/del_regex');
   renderCodeRules(data.code_rules || []);
   bindAjaxForms();
@@ -626,7 +634,7 @@ function renderLogs(data){
 function renderRegexResult(r){
   if(!r) return;
   const box = document.getElementById('debugResult');
-  box.innerHTML = `<div class="debug-result ${r.matched?'ok-box':'warn-box'}"><div><b>命中：</b>${r.matched?'是':'否'}${r.usage_notice?' / 已被使用通知过滤':''}${r.closed_register_notice?' / 已关闭注册过滤':''}${r.registration_success_notice?' / 个人注册成功通知过滤':''}</div>${r.rule?'<div><b>命中规则：</b><code>'+esc(r.rule)+'</code></div>':''}${r.candidate?'<div><b>命中文本：</b>'+esc(r.candidate)+'</div>':''}${r.code_note?'<div><b>码识别：</b>'+esc(r.code_rule||'已识别')+' / '+esc(r.code_note)+'</div>':''}<div><b>活动类型：</b>${esc(r.activity)}　<b>去重时间：</b>${r.ttl_minutes==0?'不去重':esc(r.ttl_minutes)+' 分钟'}</div>${r.code_identity?'<div><b>完整码身份：</b><code>'+esc(r.code_identity)+'</code></div>':''}${r.lottery_identity?'<div><b>抽奖唯一字段：</b><code>'+esc(r.lottery_identity)+'</code></div><div><b>抽奖去重模式：</b>'+esc(r.lottery_mode||'id')+'</div>':''}<div><b>去重 ID：</b><code>${esc(r.dedup_id)}</code></div><details class="inner-details"><summary>查看清理结果</summary><div class="code-block"><b>原文本</b><pre>${esc(r.original)}</pre></div><div class="code-block"><b>清理文本</b><pre>${esc(r.normalized)}</pre></div><div class="code-block"><b>紧凑文本</b><pre>${esc(r.compact)}</pre></div><div class="code-block"><b>核心文本</b><pre>${esc(r.core)}</pre></div></details></div>`;
+  box.innerHTML = `<div class="debug-result ${r.matched?'ok-box':'warn-box'}"><div><b>命中：</b>${r.matched?'是':'否'}${r.excluded_text_notice?' / 命中排除文本：'+esc(r.excluded_keyword||''):''}${r.usage_notice?' / 已被使用通知过滤':''}${r.closed_register_notice?' / 已关闭注册过滤':''}${r.registration_success_notice?' / 个人注册成功通知过滤':''}</div>${r.rule?'<div><b>命中规则：</b><code>'+esc(r.rule)+'</code></div>':''}${r.candidate?'<div><b>命中文本：</b>'+esc(r.candidate)+'</div>':''}${r.code_note?'<div><b>码识别：</b>'+esc(r.code_rule||'已识别')+' / '+esc(r.code_note)+'</div>':''}<div><b>活动类型：</b>${esc(r.activity)}　<b>去重时间：</b>${r.ttl_minutes==0?'不去重':esc(r.ttl_minutes)+' 分钟'}</div>${r.code_identity?'<div><b>完整码身份：</b><code>'+esc(r.code_identity)+'</code></div>':''}${r.lottery_identity?'<div><b>抽奖唯一字段：</b><code>'+esc(r.lottery_identity)+'</code></div><div><b>抽奖去重模式：</b>'+esc(r.lottery_mode||'id')+'</div>':''}<div><b>去重 ID：</b><code>${esc(r.dedup_id)}</code></div><details class="inner-details"><summary>查看清理结果</summary><div class="code-block"><b>原文本</b><pre>${esc(r.original)}</pre></div><div class="code-block"><b>清理文本</b><pre>${esc(r.normalized)}</pre></div><div class="code-block"><b>紧凑文本</b><pre>${esc(r.compact)}</pre></div><div class="code-block"><b>核心文本</b><pre>${esc(r.core)}</pre></div></details></div>`;
 }
 function renderPrecheckResult(r){
   if(!r) return;
