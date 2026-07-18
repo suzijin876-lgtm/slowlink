@@ -66,10 +66,11 @@ class CpuRootCauseMitigationV13874Tests(unittest.TestCase):
     def test_watchdog_captures_stack_flow_and_thread_state_without_process_args(self):
         source = read(ROOT / "ops" / "slowlink_watchdog.sh")
 
-        self.assertIn('docker kill --signal=USR1 "$APP_CONTAINER"', source)
+        self.assertIn("kill -USR1 1", source)
         self.assertIn("listener_flow_stats", source)
-        self.assertIn("python stack requested", source)
-        self.assertIn("pid,tid,ppid,comm,%cpu,%mem,etime", source)
+        self.assertIn("python stack series requested", source)
+        self.assertIn("thread CPU window", source)
+        self.assertNotIn('docker kill --signal=USR1 "$APP_CONTAINER"', source)
         self.assertNotIn("etime,args", source)
         self.assertIn('docker restart "$APP_CONTAINER"', source)
         self.assertNotIn("docker restart slowlink_redis", source)

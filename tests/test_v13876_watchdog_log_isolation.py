@@ -24,11 +24,13 @@ class WatchdogLogIsolationV13876Tests(unittest.TestCase):
         self.assertIn('faulthandler.register(', source)
         self.assertIn('file=_stack_dump_file', source)
 
-    def test_watchdog_collects_one_stack_without_copying_docker_logs(self):
+    def test_watchdog_collects_isolated_stack_series_without_copying_docker_logs(self):
         source = read(ROOT / "ops" / "slowlink_watchdog.sh")
 
         self.assertIn('STACK_DUMP_PATH=', source)
-        self.assertIn('docker kill --signal=USR1 "$APP_CONTAINER"', source)
+        self.assertIn('STACK_SAMPLE_COUNT="${STACK_SAMPLE_COUNT:-3}"', source)
+        self.assertIn("kill -USR1 1", source)
+        self.assertNotIn('docker kill --signal=USR1 "$APP_CONTAINER"', source)
         self.assertIn('cat "$1"', source)
         self.assertIn(': > "$1"', source)
         self.assertEqual(source.count('capture_python_state "'), 1)

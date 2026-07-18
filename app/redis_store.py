@@ -23,9 +23,18 @@ SAFE_PURE_CODE_TRIGGER_RULE = (
     r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
     r"(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+$"
 )
+LEGACY_REGISTRATION_ANNOUNCEMENT_RULE = (
+    r"((?:[🫧🎫🎟️🎭🤖⏳].*?(?:自由|定时)注册.*(?:\n[🫧🎫🎟️🎭🤖⏳].*\|\s*\d+.*)*\n?)+)"
+    r"|((?:[🎉✨📱⏰].*?开放注册.*(?:\n[🎉✨📱⏰].*)*\n?)+)"
+)
+SAFE_REGISTRATION_ANNOUNCEMENT_RULE = (
+    r"(?m)^(?:[🫧🎫🎟️🎭🤖⏳][^\n]*(?:自由|定时)注册"
+    r"|[🎉✨📱⏰][^\n]*开放注册)[^\n]*$"
+)
 KNOWN_REGEX_RULE_MIGRATIONS = {
     LEGACY_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
     LEGACY_SAFE_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
+    LEGACY_REGISTRATION_ANNOUNCEMENT_RULE: SAFE_REGISTRATION_ANNOUNCEMENT_RULE,
 }
 
 
