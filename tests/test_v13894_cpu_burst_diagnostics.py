@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
-EXPECTED_VERSION = "1.38.94"
+EXPECTED_VERSION = "1.38.95"
 
 
 def load_redis_store():
@@ -40,7 +40,7 @@ def load_redis_store():
 
 
 class CpuBurstDiagnosticsV13894Tests(unittest.TestCase):
-    def test_version_is_v13894(self):
+    def test_version_is_current(self):
         self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8-sig").strip(), EXPECTED_VERSION)
         config = (APP / "config.py").read_text(encoding="utf-8-sig")
         self.assertIn(f'APP_VERSION = "{EXPECTED_VERSION}"', config)

@@ -19,9 +19,13 @@ LEGACY_SAFE_PURE_CODE_TRIGGER_RULE = (
     r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
     r"(?:Register|Renew)_[A-Za-z0-9_-]+$"
 )
-SAFE_PURE_CODE_TRIGGER_RULE = (
+LEGACY_MASKED_PURE_CODE_TRIGGER_RULE = (
     r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
     r"(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+$"
+)
+SAFE_PURE_CODE_TRIGGER_RULE = (
+    r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
+    r"(?:Register|Renew)_(?:[^\s*`\u3400-\u9fff]|数字|字母)+$"
 )
 LEGACY_REGISTRATION_ANNOUNCEMENT_RULE = (
     r"((?:[🫧🎫🎟️🎭🤖⏳].*?(?:自由|定时)注册.*(?:\n[🫧🎫🎟️🎭🤖⏳].*\|\s*\d+.*)*\n?)+)"
@@ -34,6 +38,7 @@ SAFE_REGISTRATION_ANNOUNCEMENT_RULE = (
 KNOWN_REGEX_RULE_MIGRATIONS = {
     LEGACY_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
     LEGACY_SAFE_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
+    LEGACY_MASKED_PURE_CODE_TRIGGER_RULE: SAFE_PURE_CODE_TRIGGER_RULE,
     LEGACY_REGISTRATION_ANNOUNCEMENT_RULE: SAFE_REGISTRATION_ANNOUNCEMENT_RULE,
 }
 

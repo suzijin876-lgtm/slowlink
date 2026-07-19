@@ -17,7 +17,10 @@ USAGE_HARD_WORDS = [
     "领取成功", "已领取", "被领取", "使用者", "使用用户",
 ]
 
-CODE_LINE_RE = re.compile(r"^.+-\d+-(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+$", re.I)
+CODE_LINE_RE = re.compile(
+    r"^.+-\d+-(?:Register|Renew)_(?:[^\s*`\u3400-\u9fff]|数字|字母)+$",
+    re.I,
+)
 INV_CODE_RE = re.compile(r"\bINV-[A-Z0-9]+(?:-[A-Z0-9]+)+\b", re.I)
 USAGE_STATUS_RE = re.compile(r"已使用\s*[:：]\s*\d+\s*次?", re.I)
 

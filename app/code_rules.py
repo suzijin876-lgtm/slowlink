@@ -7,18 +7,39 @@ from redis_store import get_json, set_json
 
 CODE_RULES_KEY = "code_rules"
 
-REGISTER_SUFFIX_TOKEN_PATTERN = r"(?:[A-Za-z0-9_-]|数字|字母)"
-REGISTER_SUFFIX_PATTERN = REGISTER_SUFFIX_TOKEN_PATTERN + "+"
+LEGACY_MASKED_REGISTER_SUFFIX_PATTERN = r"(?:[A-Za-z0-9_-]|数字|字母)+"
+LEGACY_REGISTER_SUFFIX_BOUNDARY = (
+    r"(?=$|\s|[，。！？？；：、）】]"
+    r"|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
+)
+# Guess-code suffixes may contain visible symbols. Chinese prose is excluded so
+# a code followed directly by explanatory text cannot consume the whole line.
+# Asterisks/backticks remain Telegram formatting markers, not literal code data.
+REGISTER_SUFFIX_TOKEN_PATTERN = r"(?:[^\s*`\u3400-\u9fff]|数字|字母)"
+REGISTER_SUFFIX_PATTERN = REGISTER_SUFFIX_TOKEN_PATTERN + "+?"
 OBFUSCATED_REGISTER_SUFFIX_PATTERN = (
     REGISTER_SUFFIX_TOKEN_PATTERN + r"(?:\**" + REGISTER_SUFFIX_TOKEN_PATTERN + r")*"
 )
 REGISTER_SUFFIX_BOUNDARY = (
-    r"(?=$|\s|[，。！？？；：、）】]"
-    r"|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
+    r"(?=$|\s|[，。！？？；：、）】,.;:)\]}>`~*](?!"
+    + REGISTER_SUFFIX_TOKEN_PATTERN
+    + r"))"
 )
 LEGACY_SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
     r"(?:-[^\s*`-]+)*-(?:Register|Renew)_[A-Za-z0-9_-]+"
+)
+LEGACY_MASKED_SAFE_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
+    r"(?:-[^\s*`-]+)*-(?:Register|Renew)_"
+    + LEGACY_MASKED_REGISTER_SUFFIX_PATTERN
+    + LEGACY_REGISTER_SUFFIX_BOUNDARY
+)
+LEGACY_SERVER_MASKED_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
+    r"(?:-[^\s*`-]+)*-(?:Register|Renew)_"
+    + LEGACY_MASKED_REGISTER_SUFFIX_PATTERN
+    + r"(?![A-Za-z0-9_-]|[\u3400-\u9fff])"
 )
 SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
@@ -27,6 +48,12 @@ SAFE_REGISTER_RENEW_PATTERN = (
 LEGACY_SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
     r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_[A-Za-z0-9_-]+"
+)
+LEGACY_MASKED_SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
+    r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_"
+    + LEGACY_MASKED_REGISTER_SUFFIX_PATTERN
+    + LEGACY_REGISTER_SUFFIX_BOUNDARY
 )
 SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
@@ -40,7 +67,10 @@ SAFE_WHITELIST_PATTERN = (
 )
 LEGACY_REGISTER_RENEW_PATTERN_MIGRATIONS = {
     LEGACY_SAFE_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
+    LEGACY_MASKED_SAFE_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
+    LEGACY_SERVER_MASKED_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
     LEGACY_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
+    LEGACY_MASKED_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     r"[A-Za-z0-9]+-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     r"[^\s]+-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
     r"[^\s]+(?:-[^\s]+)*-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
@@ -69,7 +99,7 @@ DEFAULT_CODE_RULES: list[dict[str, Any]] = [
         "fast": True,
         "trigger": False,
         "strict_context": False,
-        "note": "支持 SAKURA-30-Register_xxx / 神秘礼物-公费-1-Register_xxx / 多段项目名；完整强格式可直接触发",
+        "note": "支持多段项目名及 @、.、#、% 等猜码符号；完整强格式可直接触发",
     },
     {
         "name": "通用连字符邀请码",

@@ -13,7 +13,7 @@ EXPECTED_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
 LEGACY_PURE_CODE_RULE = r"^(?!.*码使用)[^-]+-\d+-(?:Register|Renew)_.+$"
 SAFE_PURE_CODE_RULE = (
     r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
-    r"(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+$"
+    r"(?:Register|Renew)_(?:[^\s*`\u3400-\u9fff]|数字|字母)+$"
 )
 
 

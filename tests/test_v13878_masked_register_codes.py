@@ -157,6 +157,21 @@ class MaskedRegisterCodeV13878Tests(unittest.TestCase):
         pattern = re.compile(redis_store.SAFE_PURE_CODE_TRIGGER_RULE, re.I | re.M)
         self.assertIsNotNone(pattern.search(MASKED_CODES))
 
+    def test_existing_masked_rule_migrates_to_symbol_rule(self):
+        old_rule = (
+            r"^(?!.*码使用)(?:[^\s-]+-)+\d+(?:-[^\s-]+)*-"
+            r"(?:Register|Renew)_(?:[A-Za-z0-9_-]|数字|字母)+$"
+        )
+        redis_store = load_redis_store(FakeRedisClient({old_rule}))
+
+        redis_store.ensure_defaults()
+
+        rules = redis_store.r.smembers("regex_rules")
+        self.assertNotIn(old_rule, rules)
+        self.assertIn(redis_store.SAFE_PURE_CODE_TRIGGER_RULE, rules)
+        pattern = re.compile(redis_store.SAFE_PURE_CODE_TRIGGER_RULE, re.I | re.M)
+        self.assertIsNotNone(pattern.search("帝服-30-Register_mK@nxdnuwU"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -70,11 +70,12 @@ class ObfuscatedRegisterTriggerV13879Tests(unittest.TestCase):
         self.assertFalse(result["analysis"].get("matched"))
         self.assertTrue(result["analysis"].get("usage_notice"))
 
-    def test_other_punctuation_is_not_silently_removed(self):
+    def test_period_inside_complete_code_is_preserved(self):
         result = inspect_with_empty_main_rules("GuaiCum-30-Register_ZlB5.cqmu")
 
-        self.assertFalse(result["analysis"].get("matched"))
-        self.assertFalse(result["trigger"].get("can_trigger"))
+        self.assertTrue(result["analysis"].get("matched"))
+        self.assertTrue(result["trigger"].get("can_trigger"))
+        self.assertEqual(result["trigger"].get("code"), "GuaiCum-30-Register_ZlB5.cqmu")
 
 
 if __name__ == "__main__":
