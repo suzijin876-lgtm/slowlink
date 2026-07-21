@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
-EXPECTED_VERSION = "1.38.96"
+EXPECTED_VERSION = "1.38.97"
 SOURCE_CODE = "帝服-30-Register_mK@nxdnuwU"
 OLD_MASKED_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"

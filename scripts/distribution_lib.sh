@@ -252,7 +252,9 @@ copy_release_files() {
   stage=$1
   [ "$INSTALL_DIR" = "/opt/slowlink" ] || die "安装目录安全检查失败"
   mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/data/sessions" || die "创建安装目录失败"
-  rm -rf -- "$INSTALL_DIR/app" || die "清理旧应用目录失败"
+  for program_path in $PROGRAM_PATHS; do
+    rm -rf -- "$INSTALL_DIR/$program_path" || die "清理旧程序文件失败：$program_path"
+  done
   cp -a "$stage"/. "$INSTALL_DIR"/ || die "复制程序文件失败"
   find "$INSTALL_DIR/app" -type f -exec touch {} + || die "刷新应用构建时间失败"
   mkdir -p "$INSTALL_DIR/data/sessions" || die "创建 Session 目录失败"
@@ -334,7 +336,7 @@ deploy_application() {
   web_port_value=$(read_web_port)
   assert_web_port_available "$web_port_value" || die "网页端口预检失败"
   log "构建 slowlink_app 镜像"
-  docker compose build "$APP_SERVICE" || die "slowlink_app 镜像构建失败"
+  docker compose build --no-cache "$APP_SERVICE" || die "slowlink_app 镜像构建失败"
   log "启动 slowlink_app 容器"
   docker compose up -d --no-deps "$APP_SERVICE" || {
     show_diagnostics

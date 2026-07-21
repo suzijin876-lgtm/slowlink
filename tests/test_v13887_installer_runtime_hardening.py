@@ -90,7 +90,7 @@ class InstallerAndRuntimeHardeningV13887Tests(unittest.TestCase):
         self.assertIn("backup_program_files", install)
         self.assertIn("restore_program_files", install)
         self.assertIn("rollback_previous_release", install)
-        self.assertIn('docker compose build "$APP_SERVICE"', library)
+        self.assertIn('docker compose build --no-cache "$APP_SERVICE"', library)
         self.assertIn('docker compose up -d --no-deps "$APP_SERVICE"', library)
         self.assertIn("slowlink_app 镜像构建失败", library)
         self.assertIn("slowlink_app 容器启动失败", library)
@@ -183,7 +183,7 @@ class InstallerAndRuntimeHardeningV13887Tests(unittest.TestCase):
         copy_body = copy_release.group("body")
         for guarded_step in (
             'mkdir -p "$INSTALL_DIR" "$INSTALL_DIR/data/sessions" || die',
-            'rm -rf -- "$INSTALL_DIR/app" || die',
+            'rm -rf -- "$INSTALL_DIR/$program_path" || die',
             'find "$INSTALL_DIR/app" -type f -exec touch {} + || die',
         ):
             self.assertIn(guarded_step, copy_body)

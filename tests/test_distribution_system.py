@@ -32,7 +32,7 @@ class DistributionSystemTests(unittest.TestCase):
             "get.docker.com",
             "docker compose version",
             "slowlink-watchdog.service",
-            'docker compose build "$APP_SERVICE"',
+            'docker compose build --no-cache "$APP_SERVICE"',
             'docker compose up -d --no-deps "$APP_SERVICE"',
             "1.安装",
             "2.更新到最新版本",
