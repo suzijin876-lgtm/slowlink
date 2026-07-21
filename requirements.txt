@@ -1,5 +1,5 @@
 telethon>=1.38.0,<2.0
 flask==3.0.3
 redis==5.0.8
-waitress==3.0.0
+waitress==3.0.2
 
