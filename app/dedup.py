@@ -6,6 +6,7 @@ import unicodedata
 from typing import Any
 
 from redis_store import r, sha, format_time
+from telegram_start_links import extract_telegram_start_register_renew_codes
 
 # ---- Text normalization for dedup ----
 
@@ -343,8 +344,12 @@ SOURCE_LINE_HINTS = [
 def _register_renew_code_fingerprints(text: str) -> list[str]:
     fingerprints: list[str] = []
     seen: set[str] = set()
-    for match in REGISTER_RENEW_CODE_RE.finditer(text or ""):
-        code = match.group(1).strip()
+    codes = [
+        match.group(1).strip()
+        for match in REGISTER_RENEW_CODE_RE.finditer(text or "")
+    ]
+    codes.extend(extract_telegram_start_register_renew_codes(text))
+    for code in codes:
         if not code or code in seen:
             continue
         seen.add(code)

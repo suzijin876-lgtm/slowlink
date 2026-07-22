@@ -19,8 +19,12 @@ def function_body(source: str, name: str) -> str:
 
 
 class DependencyBuildFreshnessV13897Tests(unittest.TestCase):
-    def test_version_is_v13897(self):
-        self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8-sig").strip(), "1.38.97")
+    def test_version_metadata_is_consistent(self):
+        version = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
+        config = (ROOT / "app" / "config.py").read_text(encoding="utf-8-sig")
+
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        self.assertIn(f'APP_VERSION = "{version}"', config)
 
     def test_release_copy_replaces_program_files_before_copying(self):
         source = LIBRARY.read_text(encoding="utf-8-sig")

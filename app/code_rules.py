@@ -4,6 +4,9 @@ import time
 from typing import Any
 
 from redis_store import get_json, set_json
+from telegram_start_links import (
+    extract_first_telegram_start_register_renew_code,
+)
 
 CODE_RULES_KEY = "code_rules"
 
@@ -411,6 +414,31 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
     compact = re.sub(r"[\s\u200b\u200c\u200d\ufeff\u2060]+", "", raw)
     candidates = [raw, compact] if compact != raw else [raw]
     compiled_rules = _compiled_rules()
+    telegram_start_code = extract_first_telegram_start_register_renew_code(raw)
+    if telegram_start_code:
+        direct_rule = {
+            "name": "Telegram start Register/Renew 深链",
+            "pattern": "telegram_bot_start_register_renew",
+            "fast": True,
+            "trigger": False,
+            "strict_context": False,
+        }
+        safe, safe_reason = _is_safe_code_context(raw, telegram_start_code, direct_rule)
+        if not safe_only or safe:
+            can_trigger = safe and (trigger_only or bool(direct_rule.get("trigger", False)))
+            return {
+                "index": -1,
+                "name": direct_rule["name"],
+                "pattern": direct_rule["pattern"],
+                "code": telegram_start_code,
+                "identity": "strong_register_renew:" + telegram_start_code,
+                "fast": True,
+                "trigger": bool(trigger_only or direct_rule.get("trigger", False)),
+                "can_trigger": can_trigger,
+                "strict_context": False,
+                "safe": safe,
+                "safe_reason": safe_reason,
+            }
     direct_whitelist = _extract_whitelist_code(raw)
     if direct_whitelist:
         # Whitelist is an extraction/dedup format only. The main matcher must
