@@ -47,11 +47,8 @@ REGISTRATION_SUCCESS_RE = re.compile(
 )
 REGISTRATION_ACCOUNT_MARKERS = ["创建了", "账号有效期", "到期时间"]
 
-REGEX_META_RE = re.compile(r"[\^\$\[\]\(\)\{\}\?\+\*\\\|]")
-
-
 def get_text(message) -> str:
-    return (getattr(message, "message", None) or "").strip()
+    return getattr(message, "message", None) or ""
 
 
 def normalize_text(text: str) -> str:
@@ -91,15 +88,8 @@ def _split_rule_blob(blob: str) -> list[str]:
     out: list[str] = []
     for part in str(blob or "").split(";;"):
         part = part.strip()
-        if not part:
-            continue
-        if REGEX_META_RE.search(part):
+        if part:
             out.append(part)
-        else:
-            for line in part.splitlines():
-                line = line.strip()
-                if line:
-                    out.append(line)
     return out
 
 
@@ -116,12 +106,7 @@ def _rule_blob_snapshot() -> tuple[str, ...]:
 
 
 def _compiled_rules(ttl: float = 60.0):
-    """Split rules into fast keywords and compiled regexes.
-
-    Returns dict with:
-      keywords: list[str] — plain text for 'in' operator (no regex overhead)
-      regexes: list[(str, re.Pattern)] — compiled with re.I|re.M only, no DOTALL
-    """
+    """Compile each user rule unchanged with the established re.I/re.M flags."""
     now = time.monotonic()
     cached_raw = _RULE_CACHE.get("raw")
     cached_ts = float(_RULE_CACHE.get("ts") or 0)
@@ -129,7 +114,6 @@ def _compiled_rules(ttl: float = 60.0):
         return _RULE_CACHE
     raw = tuple(sorted(smembers("regex_rules")))
 
-    keywords: list[tuple[str, str]] = []  # (lowered, original)
     regexes: list[tuple[str, re.Pattern]] = []
     seen = set()
 
@@ -139,24 +123,13 @@ def _compiled_rules(ttl: float = 60.0):
                 continue
             seen.add(rule)
 
-            # Plain keyword: no regex metacharacters, fast 'in' check
-            if not REGEX_META_RE.search(rule):
-                keywords.append((rule.lower(), rule))
-                continue
-
             try:
-                # re.I | re.M only — no DOTALL. Rules that need cross-line
-                # matching should use (?s) prefix explicitly.
                 cre = re.compile(rule, re.I | re.M)
                 regexes.append((rule, cre))
             except re.error:
-                try:
-                    escaped = re.escape(rule)
-                    keywords.append((escaped.lower(), escaped))
-                except Exception:
-                    continue
+                continue
 
-    _RULE_CACHE.update({"ts": now, "raw": raw, "keywords": keywords, "regexes": regexes})
+    _RULE_CACHE.update({"ts": now, "raw": raw, "keywords": [], "regexes": regexes})
     return _RULE_CACHE
 
 
@@ -245,8 +218,8 @@ def _is_registration_success_notice(normalized: str, compact: str) -> bool:
 # ---- main matching (optimized) ----
 
 def analyze_message(text: str) -> dict:
-    original = (text or "").strip()
-    if not original:
+    original = text or ""
+    if not original.strip():
         return {
             "matched": False,
             "rule": "",
@@ -293,26 +266,10 @@ def analyze_message(text: str) -> dict:
 
     rules = _compiled_rules()
 
-    keywords = rules.get("keywords") or []
-    if keywords:
-        low_norm = normalized.lower()
-        for kw_lower, kw_orig in keywords:
-            if kw_lower in low_norm:
-                code_detail = extract_code_detail(normalized) or extract_code_detail(compact)
-                return {
-                    "matched": True,
-                    "rule": kw_orig,
-                    "code_detail": code_detail or {},
-                    "normalized": normalized,
-                    "compact": compact,
-                    "usage_notice": False,
-                    "closed_register_notice": False,
-                }
-
     regexes = rules.get("regexes") or []
     for raw, cre in regexes:
         try:
-            if cre.search(normalized):
+            if cre.search(original):
                 code_detail = extract_code_detail(normalized) or extract_code_detail(compact)
                 return {
                     "matched": True,
@@ -350,13 +307,13 @@ def analyze_message(text: str) -> dict:
 
 
 def match_rules(text: str) -> tuple[bool, str]:
-    """Fast two-tier matching: keywords first, then compiled regexes.
+    """Run user regexes unchanged against the original message text.
 
-    Text prep done once; guards receive pre-computed values.
-    Text capped at 8KB to prevent regex backtrack on huge messages.
+    Guards still use normalized text. Regex input is capped at 8KB to prevent
+    pathological backtracking on oversized messages.
     """
-    text = (text or "").strip()
-    if not text:
+    text = text or ""
+    if not text.strip():
         return False, ""
     if len(text) > 8192:
         text = text[:8192]
@@ -376,19 +333,10 @@ def match_rules(text: str) -> tuple[bool, str]:
 
     rules = _compiled_rules()
 
-    # Tier 1: fast keyword check
-    keywords = rules.get("keywords") or []
-    if keywords:
-        low_norm = normalized.lower()
-        for kw_lower, kw_orig in keywords:
-            if kw_lower in low_norm:
-                return True, kw_orig
-
-    # Tier 2: compiled regexes
     regexes = rules.get("regexes") or []
     for raw, cre in regexes:
         try:
-            if cre.search(normalized):
+            if cre.search(text):
                 return True, raw
         except Exception:
             continue
@@ -414,17 +362,18 @@ def expanded_rules() -> list[str]:
 def rule_diagnostics() -> list[dict]:
     items = []
     for rule in expanded_rules():
-        is_regex = bool(REGEX_META_RE.search(rule))
         try:
             re.compile(rule, re.I | re.M)
-            items.append({"rule": rule, "type": "regex" if is_regex else "keyword", "ok": True, "error": ""})
+            items.append({"rule": rule, "type": "regex", "ok": True, "error": ""})
         except re.error as e:
             items.append({"rule": rule, "type": "regex", "ok": False, "error": str(e)})
     return items
 
 
 def match_rule_details(text: str) -> dict:
-    original = (text or "").strip()
+    original = text or ""
+    if len(original) > 8192:
+        original = original[:8192]
     normalized = normalize_text(original)
     excluded_keyword = _excluded_text_keyword(normalized, ttl=0)
     if excluded_keyword:
@@ -472,28 +421,12 @@ def match_rule_details(text: str) -> dict:
 
     rules = _compiled_rules(ttl=0)
 
-    # Tier 1: keywords
-    keywords = rules.get("keywords") or []
-    if keywords:
-        low_norm = normalized.lower()
-        for kw_lower, kw_orig in keywords:
-            if kw_lower in low_norm:
-                return {
-                    "matched": True, "rule": kw_orig, "candidate": "清理文本",
-                    "usage_notice": False, "closed_register_notice": False,
-                    "code_detected": bool(code_detail),
-                    "code_rule": code_detail.get("name", "") if code_detail else "",
-                    "code_note": code_detail.get("safe_reason", "") if code_detail else "",
-                    "original": original, "normalized": normalized, "compact": compact,
-                }
-
-    # Tier 2: regexes
     regexes = rules.get("regexes") or []
     for raw, cre in regexes:
         try:
-            if cre.search(normalized):
+            if cre.search(original):
                 return {
-                    "matched": True, "rule": raw, "candidate": "清理文本",
+                    "matched": True, "rule": raw, "candidate": "原始文本",
                     "usage_notice": False, "closed_register_notice": False,
                     "code_detected": bool(code_detail),
                     "code_rule": code_detail.get("name", "") if code_detail else "",
