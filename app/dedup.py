@@ -185,9 +185,12 @@ LOTTERY_SECTION_LABELS = (
     "奖品",
     "奖品内容",
     "发布群组",
+    "抽奖条件",
     "参与要求",
     "口令",
     "活动详情",
+    "活动说明",
+    "开奖条件",
     "创建者",
     "发起人",
     "参与关键词",
@@ -247,8 +250,17 @@ def extract_lottery_template_identity(text: str, message_link: str = "", source:
             f"|prizes:{'|'.join(numbered_prizes)}"
         )
 
+    title = _extract_lottery_title(raw)
+    prizes = _extract_lottery_section_values(raw, ("奖品", "奖品内容"))
+    requirement = _extract_lottery_line_value(raw, ("参与要求",))
+    details = _extract_lottery_section_values(raw, ("活动说明",))
+    if title and draw_time and prizes and requirement and details:
+        return (
+            f"aq-event:title:{title}|draw:{draw_time}|prizes:{'|'.join(prizes)}"
+            f"|requirement:{requirement}|details:{'|'.join(details)}"
+        )
+
     if "抽奖活动已开始" in raw:
-        title = _extract_lottery_title(raw)
         deadline = _extract_lottery_line_value(raw, ("截止时间",))
         prizes = _extract_lottery_section_values(raw, ("奖品", "奖品内容"))
         publish_groups = _extract_lottery_section_values(raw, ("发布群组",))
