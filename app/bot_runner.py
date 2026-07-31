@@ -440,8 +440,8 @@ class BotManager:
                 except Exception:
                     msg_ts = None
                 payload = {"event": event, "enqueue_ts": receive_ts, "receive_ts": receive_ts, "message_ts": msg_ts}
-                # Quick priority check: scan raw text for high-priority keywords
-                try: raw_text = getattr(event.message, "message", "") or ""
+                # Quick priority check uses the same plain/RichMessage extraction as matching.
+                try: raw_text = get_text(event.message)
                 except Exception: raw_text = ""
                 low_text = raw_text.lower()
                 is_priority = any(k in low_text for k in ["register", "renew", "whitelist", "抽奖", "开放注册", "自由注册", "开注", "邀请码", "注册码", "已为您生成", "总注册限制", "已注册人数", "剩余可注册", "开启注册", "定时注册"])

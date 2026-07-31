@@ -47,8 +47,59 @@ REGISTRATION_SUCCESS_RE = re.compile(
 )
 REGISTRATION_ACCOUNT_MARKERS = ["创建了", "账号有效期", "到期时间"]
 
+def _rich_text(node, depth: int = 0) -> str:
+    if node is None or depth > 20:
+        return ""
+    if isinstance(node, str):
+        return node
+
+    texts = getattr(node, "texts", None)
+    if isinstance(texts, (list, tuple)):
+        return "".join(_rich_text(item, depth + 1) for item in texts)
+
+    text = getattr(node, "text", None)
+    if isinstance(text, str):
+        return text
+    if text is not None:
+        return _rich_text(text, depth + 1)
+    return ""
+
+
+def _rich_block_text(block, depth: int = 0) -> str:
+    if block is None or depth > 20:
+        return ""
+
+    text = getattr(block, "text", None)
+    if text is not None:
+        return _rich_text(text, depth + 1)
+
+    for attr in ("title", "author"):
+        value = getattr(block, attr, None)
+        if value is not None:
+            extracted = _rich_text(value, depth + 1)
+            if extracted:
+                return extracted
+
+    for attr in ("blocks", "items", "rows", "cells"):
+        children = getattr(block, attr, None)
+        if isinstance(children, (list, tuple)):
+            parts = [_rich_block_text(child, depth + 1) for child in children]
+            return "\n".join(part for part in parts if part.strip())
+    return ""
+
+
 def get_text(message) -> str:
-    return getattr(message, "message", None) or ""
+    plain = getattr(message, "message", None)
+    if plain:
+        return plain
+
+    rich_message = getattr(message, "rich_message", None)
+    blocks = getattr(rich_message, "blocks", None)
+    if not isinstance(blocks, (list, tuple)):
+        return ""
+
+    parts = [_rich_block_text(block) for block in blocks]
+    return "\n".join(part.strip("\r\n") for part in parts if part.strip())
 
 
 def normalize_text(text: str) -> str:
