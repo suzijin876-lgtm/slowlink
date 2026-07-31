@@ -138,12 +138,14 @@ class MaskedRegisterCodeV13878Tests(unittest.TestCase):
         self.assertEqual(len(fingerprints), 3)
         self.assertEqual(len(set(fingerprints)), 3)
 
-    def test_unknown_chinese_suffix_is_not_truncated_into_a_code_identity(self):
+    def test_arbitrary_chinese_guess_hint_is_preserved_in_code_identity(self):
         code_rules = load_code_rules()
+        code = "Wlao-30-Register_abc任意KGE3"
 
-        detail = code_rules.extract_code_detail("Wlao-30-Register_abc任意KGE3")
+        detail = code_rules.extract_code_detail(code)
 
-        self.assertEqual(detail, {})
+        self.assertEqual(detail.get("code"), code)
+        self.assertEqual(detail.get("identity"), "strong_register_renew:" + code)
 
     def test_existing_ascii_pure_code_rule_migrates_to_masked_rule(self):
         redis_store = load_redis_store(FakeRedisClient({

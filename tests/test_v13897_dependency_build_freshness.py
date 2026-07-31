@@ -23,7 +23,7 @@ class DependencyBuildFreshnessV13897Tests(unittest.TestCase):
         version = (ROOT / "VERSION").read_text(encoding="utf-8-sig").strip()
         config = (ROOT / "app" / "config.py").read_text(encoding="utf-8-sig")
 
-        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
+        self.assertRegex(version, r"^\d+\.\d+(?:\.\d+)?$")
         self.assertIn(f'APP_VERSION = "{version}"', config)
 
     def test_release_copy_replaces_program_files_before_copying(self):

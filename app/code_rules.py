@@ -15,18 +15,23 @@ LEGACY_REGISTER_SUFFIX_BOUNDARY = (
     r"(?=$|\s|[，。！？？；：、）】]"
     r"|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
 )
-# Guess-code suffixes may contain visible symbols. Chinese prose is excluded so
-# a code followed directly by explanatory text cannot consume the whole line.
-# Asterisks/backticks remain Telegram formatting markers, not literal code data.
-REGISTER_SUFFIX_TOKEN_PATTERN = r"(?:[^\s*`\u3400-\u9fff]|数字|字母)"
+LEGACY_SYMBOL_REGISTER_SUFFIX_TOKEN_PATTERN = r"(?:[^\s*`\u3400-\u9fff]|数字|字母)"
+LEGACY_SYMBOL_REGISTER_SUFFIX_PATTERN = LEGACY_SYMBOL_REGISTER_SUFFIX_TOKEN_PATTERN + "+?"
+LEGACY_SYMBOL_REGISTER_SUFFIX_BOUNDARY = (
+    r"(?=$|\s|[，。！？？；：、）】,.;:)\]}>`~*](?!"
+    + LEGACY_SYMBOL_REGISTER_SUFFIX_TOKEN_PATTERN
+    + r"))"
+)
+# Guess-code suffixes may contain Chinese hints and visible symbols. Spaces and
+# Telegram formatting markers still delimit the code candidate.
+REGISTER_SUFFIX_TOKEN_PATTERN = r"[^\s*`]"
 REGISTER_SUFFIX_PATTERN = REGISTER_SUFFIX_TOKEN_PATTERN + "+?"
 OBFUSCATED_REGISTER_SUFFIX_PATTERN = (
-    REGISTER_SUFFIX_TOKEN_PATTERN + r"(?:\**" + REGISTER_SUFFIX_TOKEN_PATTERN + r")*"
+    REGISTER_SUFFIX_TOKEN_PATTERN + r"(?:\**" + REGISTER_SUFFIX_TOKEN_PATTERN + r")*?"
 )
 REGISTER_SUFFIX_BOUNDARY = (
-    r"(?=$|\s|[，。！？？；：、）】,.;:)\]}>`~*](?!"
-    + REGISTER_SUFFIX_TOKEN_PATTERN
-    + r"))"
+    r"(?=$|\s|[，。！？？；：、）】]"
+    r"|[,.;:)\]}>`~*](?![A-Za-z0-9_-]))"
 )
 LEGACY_SAFE_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
@@ -58,14 +63,36 @@ LEGACY_MASKED_SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
     + LEGACY_MASKED_REGISTER_SUFFIX_PATTERN
     + LEGACY_REGISTER_SUFFIX_BOUNDARY
 )
+LEGACY_SYMBOL_SAFE_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`-]+(?:-[^\s*`-]+)*-\d+"
+    r"(?:-[^\s*`-]+)*-(?:Register|Renew)_"
+    + LEGACY_SYMBOL_REGISTER_SUFFIX_PATTERN
+    + LEGACY_SYMBOL_REGISTER_SUFFIX_BOUNDARY
+)
+LEGACY_SYMBOL_SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
+    r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_"
+    + LEGACY_SYMBOL_REGISTER_SUFFIX_PATTERN
+    + LEGACY_SYMBOL_REGISTER_SUFFIX_BOUNDARY
+)
 SAFE_GENERATED_REGISTER_RENEW_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[A-Za-z0-9]+-\d+"
     r"(?:-[A-Za-z0-9_]+)*-(?:Register|Renew)_" + REGISTER_SUFFIX_PATTERN + REGISTER_SUFFIX_BOUNDARY
 )
 WHITELIST_SUFFIX_PATTERN = r"(?a:[A-Za-z0-9]{10})"
+WHITELIST_GUESS_SUFFIX_PATTERN = (
+    r"(?=[^\s*`]*[\u3400-\u9fff])"
+    r"(?=(?:[^A-Za-z0-9\s*`]*[A-Za-z0-9]){10}[^A-Za-z0-9\s*`]*(?=$|\s))"
+    + REGISTER_SUFFIX_PATTERN
+)
 SAFE_WHITELIST_PATTERN = (
     r"(?:^|(?<=[\s:：，,]))[^\s*`\-:：，,]+(?:-[^\s*`\-:：，,]+)*-Whitelist_"
     + WHITELIST_SUFFIX_PATTERN
+    + REGISTER_SUFFIX_BOUNDARY
+)
+SAFE_GUESS_WHITELIST_PATTERN = (
+    r"(?:^|(?<=[\s:：，,]))[^\s*`\-:：，,]+(?:-[^\s*`\-:：，,]+)*-Whitelist_"
+    + WHITELIST_GUESS_SUFFIX_PATTERN
     + REGISTER_SUFFIX_BOUNDARY
 )
 LEGACY_REGISTER_RENEW_PATTERN_MIGRATIONS = {
@@ -74,6 +101,8 @@ LEGACY_REGISTER_RENEW_PATTERN_MIGRATIONS = {
     LEGACY_SERVER_MASKED_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
     LEGACY_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     LEGACY_MASKED_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
+    LEGACY_SYMBOL_SAFE_REGISTER_RENEW_PATTERN: SAFE_REGISTER_RENEW_PATTERN,
+    LEGACY_SYMBOL_SAFE_GENERATED_REGISTER_RENEW_PATTERN: SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     r"[A-Za-z0-9]+-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_GENERATED_REGISTER_RENEW_PATTERN,
     r"[^\s]+-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
     r"[^\s]+(?:-[^\s]+)*-\d+-(?:Register|Renew)_[A-Za-z0-9_-]+": SAFE_REGISTER_RENEW_PATTERN,
@@ -102,7 +131,7 @@ DEFAULT_CODE_RULES: list[dict[str, Any]] = [
         "fast": True,
         "trigger": False,
         "strict_context": False,
-        "note": "支持多段项目名及 @、.、#、% 等猜码符号；完整强格式可直接触发",
+        "note": "支持多段项目名以及中文提示、@、.、#、% 等猜码内容；完整强格式可直接触发",
     },
     {
         "name": "通用连字符邀请码",
@@ -163,6 +192,7 @@ NEGATIVE_CONTEXT = [
 
 REGISTER_RENEW_RE = re.compile(SAFE_REGISTER_RENEW_PATTERN, re.I | re.M)
 WHITELIST_RE = re.compile(SAFE_WHITELIST_PATTERN, re.I | re.M)
+GUESS_WHITELIST_RE = re.compile(SAFE_GUESS_WHITELIST_PATTERN, re.I | re.M)
 MARKDOWN_REGISTER_RENEW_RE = re.compile(
     r"(?:^|[\s:：，,])([^\s*`-]+(?:-[^\s*`-]+)*-\d+(?:-[^\s*`-]+)*-(?:Register|Renew)_)(?:[*`~]+)?("
     + OBFUSCATED_REGISTER_SUFFIX_PATTERN
@@ -324,9 +354,10 @@ def _extract_markdown_register_renew_code(text: str) -> str:
 
 def _extract_whitelist_code(text: str) -> str:
     for candidate in [text or "", *(text or "").splitlines()]:
-        match = WHITELIST_RE.search(candidate)
-        if match:
-            return _clean_code_value(match.group(0))
+        for pattern in (WHITELIST_RE, GUESS_WHITELIST_RE):
+            match = pattern.search(candidate)
+            if match:
+                return _clean_code_value(match.group(0))
     return ""
 
 
@@ -351,7 +382,12 @@ def _is_safe_code_context(text: str, code: str, rule: dict[str, Any]) -> tuple[b
         return False, "疑似不完整 Register/Renew 前缀"
     if REGISTER_RENEW_RE.search(code) or REGISTER_RENEW_RE.search(raw):
         return True, "Register/Renew 强格式"
-    if WHITELIST_RE.search(code) or WHITELIST_RE.search(raw):
+    if (
+        WHITELIST_RE.search(code)
+        or WHITELIST_RE.search(raw)
+        or GUESS_WHITELIST_RE.search(code)
+        or GUESS_WHITELIST_RE.search(raw)
+    ):
         if _has_any(raw, NEGATIVE_CONTEXT):
             return False, "Whitelist 码处于关闭或无效上下文"
         return True, "Whitelist 十位强格式"
@@ -395,7 +431,12 @@ def _canonical_code_identity(code: str, rule: dict[str, Any], raw_text: str = ""
     if not value:
         return ""
     compact = re.sub(r"[\s\u200b\u200c\u200d\ufeff\u2060]+", "", value)
-    if WHITELIST_RE.search(compact) or WHITELIST_RE.search(raw_text or ""):
+    if (
+        WHITELIST_RE.search(compact)
+        or WHITELIST_RE.search(raw_text or "")
+        or GUESS_WHITELIST_RE.search(compact)
+        or GUESS_WHITELIST_RE.search(raw_text or "")
+    ):
         return "strong_whitelist:" + compact
     if REGISTER_RENEW_RE.search(compact) or REGISTER_RENEW_RE.search(raw_text or ""):
         # Register/Renew 的随机码可能大小写敏感，保留原始大小写，只清理空白。
@@ -447,7 +488,7 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
             return {}
         direct_rule = {
             "name": "Whitelist 完整码",
-            "pattern": WHITELIST_RE.pattern,
+            "pattern": GUESS_WHITELIST_RE.pattern,
             "fast": True,
             "trigger": False,
             "strict_context": False,

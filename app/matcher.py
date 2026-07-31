@@ -18,7 +18,7 @@ USAGE_HARD_WORDS = [
 ]
 
 CODE_LINE_RE = re.compile(
-    r"^.+-\d+-(?:Register|Renew)_(?:[^\s*`\u3400-\u9fff]|数字|字母)+$",
+    r"^.+-\d+-(?:Register|Renew)_[^\s*`]+$",
     re.I,
 )
 INV_CODE_RE = re.compile(r"\bINV-[A-Z0-9]+(?:-[A-Z0-9]+)+\b", re.I)
