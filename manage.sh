@@ -23,6 +23,7 @@ usage() {
   logs       实时查看 slowlink_app 日志
   restart    只重启 slowlink_app
   update     更新到最新 GitHub Release
+  web        切换域名 HTTPS 或 IP + 端口 HTTP
   backup     备份配置、Telegram Session 和 Redis 数据
   uninstall  卸载程序并保留配置和数据
   purge      彻底删除 SlowLink 自有资源
@@ -36,10 +37,15 @@ redis_value() {
 
 show_status() {
   version=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || printf '未知')
+  SLOWLINK_WEB_MODE=$(read_web_mode)
   SLOWLINK_WEB_PORT=$(read_web_port)
   printf '版本：%s\n' "$version"
+  printf '网页模式：%s\n' "$SLOWLINK_WEB_MODE"
   printf '网页端口：%s\n' "$SLOWLINK_WEB_PORT"
-  printf '网页地址：http://服务器IP:%s\n' "$SLOWLINK_WEB_PORT"
+  printf '网页地址：%s\n' "$(web_access_url)"
+  if [ "$SLOWLINK_WEB_MODE" = "https" ]; then
+    printf 'HTTPS 代理：%s\n' "$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Status}}' 2>/dev/null || printf '未运行')"
+  fi
   if docker inspect "$APP_CONTAINER" >/dev/null 2>&1; then
     docker inspect "$APP_CONTAINER" --format '应用：{{.State.Status}} / {{if .State.Health}}{{.State.Health.Status}}{{else}}无健康检查{{end}}，重启={{.RestartCount}}，OOM={{.State.OOMKilled}}'
     docker stats --no-stream --format '资源：CPU {{.CPUPerc}}，内存 {{.MemUsage}}' "$APP_CONTAINER" 2>/dev/null || true
@@ -69,6 +75,96 @@ restart_app() {
     die "slowlink_app 重启后未通过健康检查"
   fi
   log "slowlink_app 已重启并通过健康检查"
+}
+
+configure_web_access() {
+  original_web_mode=$(read_web_mode)
+  original_bind_host=$(read_web_bind_host)
+  original_web_port=$(read_web_port)
+  original_domain=$(read_web_domain)
+
+  while true; do
+    cat > /dev/tty <<'EOF'
+网页访问方式
+1.域名 HTTPS（推荐）
+2.IP + 自定义端口 HTTP
+0.取消
+EOF
+    printf '请选择：' > /dev/tty
+    web_choice=""
+    IFS= read -r web_choice < /dev/tty || web_choice=""
+    case "$web_choice" in
+      1)
+        if [ -n "$original_domain" ]; then
+          printf '域名 [当前 %s]：' "$original_domain" > /dev/tty
+        else
+          printf '请输入已解析到本机的域名：' > /dev/tty
+        fi
+        selected_domain=""
+        IFS= read -r selected_domain < /dev/tty || selected_domain=""
+        selected_domain=${selected_domain:-$original_domain}
+        if ! validate_web_domain "$selected_domain"; then
+          printf '[输入错误] 请输入有效域名，例如 slowlink.example.com。\n' > /dev/tty
+          continue
+        fi
+        selected_mode=https
+        selected_port=$original_web_port
+        selected_bind_host=127.0.0.1
+        validate_https_app_port "$selected_port" || die "当前应用端口为 80/443，请先切到 HTTP 并改用其他端口"
+        assert_https_ports_available || die "HTTPS 端口预检失败"
+        break
+        ;;
+      2)
+        selected_mode=http
+        selected_domain=""
+        selected_bind_host=0.0.0.0
+        while true; do
+          printf '网页端口 [当前 %s]：' "$original_web_port" > /dev/tty
+          selected_port=""
+          IFS= read -r selected_port < /dev/tty || selected_port=""
+          selected_port=${selected_port:-$original_web_port}
+          if ! validate_web_port "$selected_port"; then
+            printf '[输入错误] 请输入 1-65535 的端口。\n' > /dev/tty
+            continue
+          fi
+          assert_web_port_available "$selected_port" && break
+        done
+        break
+        ;;
+      0) log "已取消网页模式切换"; return 0 ;;
+      *) printf '[输入错误] 请输入 1、2 或 0。\n' > /dev/tty ;;
+    esac
+  done
+
+  cd "$INSTALL_DIR"
+  if (
+    save_web_access "$selected_mode" "$selected_port" "$selected_domain" &&
+    SLOWLINK_WEB_MODE=$selected_mode &&
+    SLOWLINK_BIND_HOST=$selected_bind_host &&
+    SLOWLINK_WEB_PORT=$selected_port &&
+    SLOWLINK_DOMAIN=$selected_domain &&
+    export SLOWLINK_WEB_MODE SLOWLINK_BIND_HOST SLOWLINK_WEB_PORT SLOWLINK_DOMAIN &&
+    docker compose up -d --no-deps "$APP_SERVICE" &&
+    wait_for_app_health 90 &&
+    ensure_web_proxy &&
+    verify_installation
+  ); then
+    log "网页访问方式已切换：$(web_access_url)"
+    return 0
+  fi
+
+  warn "网页访问方式切换失败，正在恢复原配置"
+  save_web_access "$original_web_mode" "$original_web_port" "$original_domain" "$original_bind_host"
+  SLOWLINK_WEB_MODE=$original_web_mode
+  SLOWLINK_BIND_HOST=$original_bind_host
+  SLOWLINK_WEB_PORT=$original_web_port
+  SLOWLINK_DOMAIN=$original_domain
+  export SLOWLINK_WEB_MODE SLOWLINK_BIND_HOST SLOWLINK_WEB_PORT SLOWLINK_DOMAIN
+  if docker compose up -d --no-deps "$APP_SERVICE" && wait_for_app_health 90 && ensure_web_proxy && verify_installation; then
+    die "切换失败，已恢复原网页访问方式"
+  fi
+  show_diagnostics
+  die "切换失败，且自动恢复未通过验证"
 }
 
 download_installer() {
@@ -145,6 +241,9 @@ case "$1" in
     trap 'rm -f -- "$update_installer"' 0
     download_installer "$update_installer" || die "下载安装脚本失败"
     sh "$update_installer" --update
+    ;;
+  web)
+    configure_web_access
     ;;
   backup)
     backup_runtime

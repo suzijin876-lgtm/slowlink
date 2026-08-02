@@ -5,6 +5,8 @@ REPO="suzijin876-lgtm/slowlink"
 INSTALL_DIR="/opt/slowlink"
 REQUESTED_VERSION=""
 REQUESTED_PORT=""
+REQUESTED_DOMAIN=""
+FORCE_HTTP=0
 UPDATE_ONLY=0
 SHOW_MENU=0
 TMP_DIR=""
@@ -42,10 +44,12 @@ trap 'exit 143' TERM
 
 usage() {
   cat <<'EOF'
-用法：sudo sh install.sh [--version 1.38.87] [--port 8080] [--update]
+用法：sudo sh install.sh [--version 1.39.2] [--domain DOMAIN | --http] [--port 8080] [--update]
 
   --version VERSION  安装指定 GitHub Release
-  --port PORT        设置网页宿主机端口，默认 8080
+  --domain DOMAIN    使用域名 HTTPS，例如 slowlink.example.com
+  --http             使用 IP + 自定义端口 HTTP
+  --port PORT        设置应用宿主机端口，默认 8080
   --update           保留配置和数据并更新到最新版本
   --uninstall        卸载程序并保留配置和数据
   --purge            进入彻底删除确认流程
@@ -151,17 +155,85 @@ select_web_port() {
   log "网页端口：$SLOWLINK_WEB_PORT"
 }
 
+select_web_access() {
+  current_web_mode=$(read_web_mode)
+  current_web_domain=$(read_web_domain)
+
+  if [ -n "$REQUESTED_DOMAIN" ]; then
+    validate_web_domain "$REQUESTED_DOMAIN" || die "HTTPS 域名无效：$REQUESTED_DOMAIN"
+    SLOWLINK_WEB_MODE=https
+    SLOWLINK_DOMAIN=$REQUESTED_DOMAIN
+  elif [ "$FORCE_HTTP" -eq 1 ]; then
+    SLOWLINK_WEB_MODE=http
+    SLOWLINK_DOMAIN=""
+  elif [ "$UPDATE_ONLY" -eq 1 ]; then
+    SLOWLINK_WEB_MODE=$current_web_mode
+    SLOWLINK_DOMAIN=$current_web_domain
+    if [ "$SLOWLINK_WEB_MODE" = "https" ]; then
+      validate_web_domain "$SLOWLINK_DOMAIN" || die "已保存的 HTTPS 域名无效，请通过 --domain 重新指定"
+    fi
+  elif [ "$SHOW_MENU" -eq 1 ]; then
+    while true; do
+      cat > /dev/tty <<'EOF'
+网页访问方式
+1.域名 HTTPS（推荐）
+2.IP + 自定义端口 HTTP
+EOF
+      printf '请选择：' > /dev/tty
+      web_choice=""
+      IFS= read -r web_choice < /dev/tty || web_choice=""
+      case "$web_choice" in
+        1)
+          printf '请输入已解析到本机的域名：' > /dev/tty
+          SLOWLINK_DOMAIN=""
+          IFS= read -r SLOWLINK_DOMAIN < /dev/tty || SLOWLINK_DOMAIN=""
+          if validate_web_domain "$SLOWLINK_DOMAIN"; then
+            SLOWLINK_WEB_MODE=https
+            break
+          fi
+          printf '[输入错误] 请输入有效域名，例如 slowlink.example.com。\n' > /dev/tty
+          ;;
+        2)
+          SLOWLINK_WEB_MODE=http
+          SLOWLINK_DOMAIN=""
+          break
+          ;;
+        *) printf '[输入错误] 请输入 1 或 2。\n' > /dev/tty ;;
+      esac
+    done
+  else
+    SLOWLINK_WEB_MODE=http
+    SLOWLINK_DOMAIN=""
+  fi
+
+  select_web_port
+  if [ "$SLOWLINK_WEB_MODE" = "https" ]; then
+    validate_https_app_port "$SLOWLINK_WEB_PORT" || die "HTTPS 模式下应用端口不能使用 80 或 443，请通过 --port 指定其他端口"
+    assert_https_ports_available || die "HTTPS 端口预检失败"
+    SLOWLINK_BIND_HOST=127.0.0.1
+    log "网页模式：域名 HTTPS（$SLOWLINK_DOMAIN）"
+  else
+    SLOWLINK_BIND_HOST=0.0.0.0
+    log "网页模式：IP + 端口 HTTP"
+  fi
+  export SLOWLINK_WEB_MODE SLOWLINK_BIND_HOST SLOWLINK_WEB_PORT SLOWLINK_DOMAIN
+}
+
 cleanup_failed_install() {
   docker rm -f "$APP_CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$CADDY_CONTAINER" >/dev/null 2>&1 || true
 }
 
 rollback_previous_release() {
   warn "新版部署失败，正在恢复上一版本"
-  save_web_port "$ORIGINAL_PORT"
+  save_web_access "$ORIGINAL_WEB_MODE" "$ORIGINAL_PORT" "$ORIGINAL_DOMAIN" "$ORIGINAL_BIND_HOST"
+  SLOWLINK_WEB_MODE=$ORIGINAL_WEB_MODE
+  SLOWLINK_BIND_HOST=$ORIGINAL_BIND_HOST
   SLOWLINK_WEB_PORT=$ORIGINAL_PORT
-  export SLOWLINK_WEB_PORT
+  SLOWLINK_DOMAIN=$ORIGINAL_DOMAIN
+  export SLOWLINK_WEB_MODE SLOWLINK_BIND_HOST SLOWLINK_WEB_PORT SLOWLINK_DOMAIN
   restore_program_files "$PROGRAM_BACKUP"
-  if (deploy_application update && install_watchdog && verify_installation); then
+  if (deploy_application update && install_watchdog && ensure_web_proxy && verify_installation); then
     warn "已恢复上一版本，Redis、Session 和用户配置均已保留"
     return 0
   fi
@@ -172,13 +244,14 @@ rollback_previous_release() {
 perform_installation() {
   deploy_application "$1"
   install_watchdog
+  ensure_web_proxy || die "网页代理配置失败"
   verify_installation || die "安装后完整验证失败"
 }
 
 apply_release_transaction() {
   transaction_mode=$1
   copy_release_files "$STAGE"
-  save_web_port "$SLOWLINK_WEB_PORT"
+  save_web_access "$SLOWLINK_WEB_MODE" "$SLOWLINK_WEB_PORT" "$SLOWLINK_DOMAIN"
   perform_installation "$transaction_mode"
 }
 
@@ -193,6 +266,15 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || die "--port 缺少端口号"
       REQUESTED_PORT=$2
       shift 2
+      ;;
+    --domain)
+      [ "$#" -ge 2 ] || die "--domain 缺少域名"
+      REQUESTED_DOMAIN=$2
+      shift 2
+      ;;
+    --http)
+      FORCE_HTTP=1
+      shift
       ;;
     --update)
       UPDATE_ONLY=1
@@ -216,6 +298,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ -n "$REQUESTED_DOMAIN" ] && [ "$FORCE_HTTP" -eq 1 ]; then
+  die "--domain 与 --http 不能同时使用"
+fi
+
 require_root
 if [ "$SHOW_MENU" -eq 1 ]; then
   main_menu
@@ -231,12 +317,18 @@ ensure_docker "$TMP_DIR"
 if [ "$UPDATE_ONLY" -eq 0 ] && docker inspect "$APP_CONTAINER" >/dev/null 2>&1; then
   die "检测到 slowlink_app 已存在，请使用更新，避免无备份覆盖现有程序"
 fi
+ORIGINAL_WEB_MODE=$(read_web_mode)
+ORIGINAL_BIND_HOST=$(read_web_bind_host)
 ORIGINAL_PORT=$(read_web_port)
-select_web_port
+ORIGINAL_DOMAIN=$(read_web_domain)
+select_web_access
 download_release "$REQUESTED_VERSION" "$TMP_DIR"
 validate_release_archive "$FULL_FILE"
 STAGE="$TMP_DIR/stage"
 extract_release_archive "$FULL_FILE" "$STAGE"
+if [ "$SLOWLINK_WEB_MODE" = "https" ] && [ ! -f "$STAGE/ops/Caddyfile" ]; then
+  die "所选 Release 不支持域名 HTTPS，请安装最新版本或改用 --http"
+fi
 PROGRAM_BACKUP="$TMP_DIR/program-backup"
 if [ "$UPDATE_ONLY" -eq 1 ]; then
   backup_program_files "$PROGRAM_BACKUP"
@@ -261,5 +353,5 @@ fi
 
 installed_version=$(cat "$INSTALL_DIR/VERSION" 2>/dev/null || printf '未知')
 log "完成：SlowLink $installed_version，容器健康检查已通过"
-log "网页地址：http://服务器IP:$SLOWLINK_WEB_PORT"
+log "网页地址：$(web_access_url)"
 printf '管理命令：sudo %s/manage.sh status\n' "$INSTALL_DIR"

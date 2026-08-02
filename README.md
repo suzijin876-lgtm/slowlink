@@ -24,20 +24,26 @@ SlowLink 基于 Telethon、Flask 和 Redis，监听指定 Telegram 群组或频�
 curl -fsSL https://raw.githubusercontent.com/suzijin876-lgtm/slowlink/main/install.sh | sudo bash
 ```
 
-默认安装目录为 `/opt/slowlink`。安装完成后访问：
+默认安装目录为 `/opt/slowlink`。菜单会先选择网页访问方式：
 
-```text
-http://服务器地址:8080
-```
+- `域名 HTTPS（推荐）`：输入已解析到服务器的域名，脚本自动启动 Caddy 并申请证书。
+- `IP + 自定义端口 HTTP`：保持原有访问方式，默认端口 `8080`。
 
-菜单安装时可以直接输入网页端口，默认使用 `8080`。如果该端口已被其他程序占用，安装器会显示占用详情并推荐空闲端口，不会停止现有服务。非交互安装可以指定端口：
+非交互安装可以直接指定 HTTPS 域名：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/suzijin876-lgtm/slowlink/main/install.sh -o /tmp/slowlink-install.sh
-sudo sh /tmp/slowlink-install.sh --port 18080
+sudo sh /tmp/slowlink-install.sh --domain slowlink.example.com
 ```
 
-端口保存在 `/opt/slowlink/.env` 的 `SLOWLINK_WEB_PORT` 中，后续更新会继续沿用。
+也可以明确使用 HTTP 和自定义端口：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/suzijin876-lgtm/slowlink/main/install.sh -o /tmp/slowlink-install.sh
+sudo sh /tmp/slowlink-install.sh --http --port 18080
+```
+
+安装器会预检端口占用且不会停止现有服务。访问模式、绑定地址、端口和域名保存在 `/opt/slowlink/.env`，后续更新会完整沿用。
 
 在网页中登录 Telegram、配置监听来源、转发目标和识别规则即可开始监听。
 
@@ -50,7 +56,7 @@ sudo sh /tmp/slowlink-install.sh --port 18080
 | 文本排除 | 消息包含任意排除关键词时，在正则和码识别前直接忽略 |
 | 准确去重 | 按实际邀请码与消息特征去重，保留必要的重复日志 |
 | 优先队列 | 对重点来源优先处理，降低高消息量时的排队延迟 |
-| Web 管理 | 管理登录、监听、规则、状态与运行日志 |
+| Web 管理 | 管理登录、监听、规则、状态与运行日志，支持域名 HTTPS |
 | 自动恢复 | 容器或主机重启后，根据 Redis 状态恢复监听 |
 | CPU 保护 | 持续高 CPU 时记录诊断并只重启应用容器 |
 | 安全更新 | 下载 GitHub Release、校验 SHA-256 后再更新 |
@@ -81,14 +87,16 @@ flowchart LR
 | `sudo /opt/slowlink/manage.sh logs` | 查看应用实时日志 |
 | `sudo /opt/slowlink/manage.sh restart` | 只重启 `slowlink_app` |
 | `sudo /opt/slowlink/manage.sh update` | 更新到最新正式版本 |
+| `sudo /opt/slowlink/manage.sh web` | 切换域名 HTTPS 或 IP + 端口 HTTP |
 | `sudo /opt/slowlink/manage.sh backup` | 备份配置、Session 和 Redis 数据 |
 | `sudo /opt/slowlink/manage.sh uninstall` | 卸载程序并保留数据 |
 | `sudo /opt/slowlink/manage.sh purge` | 二次确认后彻底删除 SlowLink |
 
 ## 数据与稳定性
 
-- 更新只重建 `slowlink_app`，不会停止 `slowlink_redis` 或主机上的其他服务。
+- 更新只重建 `slowlink_app`；正常运行且域名未变的 `slowlink_caddy` 会保持不动，也不会停止 `slowlink_redis` 或主机上的其他服务。
 - `.env`、`data`、Telegram Session、Redis 数据和用户配置会被保留。
+- HTTPS 模式下应用端口只绑定 `127.0.0.1`，公网入口由 Caddy 的 80/443 提供。
 - Docker 健康检查负责检测 Web 服务状态。
 - CPU watchdog 仅在应用容器持续高负载时执行保护，并保存诊断日志。
 - 监听期望状态存入 Redis，应用重启后可自动恢复。
@@ -112,13 +120,13 @@ flowchart LR
 slowlink/
 ├── app/                    # SlowLink 应用与 Web 界面
 ├── docs/                   # 运维文档
-├── ops/                    # CPU watchdog 与 systemd 服务
+├── ops/                    # Caddy、CPU watchdog 与 systemd 服务
 ├── scripts/                # 发布构建与安装公共逻辑
 ├── tests/                  # 回归测试
 ├── install.sh              # 中文一键安装与更新菜单
 ├── manage.sh               # 日常管理命令
 ├── uninstall.sh            # 保留数据卸载与彻底删除
-├── docker-compose.yml      # 应用与 Redis 编排
+├── docker-compose.yml      # 应用、Redis 与可选 Caddy 编排
 └── CHANGELOG.md            # 完整更新日志
 ```
 

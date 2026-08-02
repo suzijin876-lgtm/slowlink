@@ -60,7 +60,7 @@ class InstallerAndRuntimeHardeningV13887Tests(unittest.TestCase):
         self.assertIn("--port", install)
         self.assertIn("REQUESTED_PORT", install)
         self.assertIn("select_web_port", install)
-        self.assertIn("save_web_port", install)
+        self.assertIn("save_web_access", install)
         self.assertIn("printf '请选择：' > /dev/tty", install)
         self.assertIn("printf '网页端口 [默认 %s]：'", install)
         self.assertNotRegex(install, r"请选择：\nEOF")
@@ -114,7 +114,10 @@ class InstallerAndRuntimeHardeningV13887Tests(unittest.TestCase):
         self.assertIsNotNone(transaction)
         transaction_body = transaction.group("body")
         self.assertIn('copy_release_files "$STAGE"', transaction_body)
-        self.assertIn('save_web_port "$SLOWLINK_WEB_PORT"', transaction_body)
+        self.assertIn(
+            'save_web_access "$SLOWLINK_WEB_MODE" "$SLOWLINK_WEB_PORT" "$SLOWLINK_DOMAIN"',
+            transaction_body,
+        )
         self.assertIn('perform_installation "$transaction_mode"', transaction_body)
         self.assertLess(
             transaction_body.index('copy_release_files "$STAGE"'),
@@ -127,8 +130,19 @@ class InstallerAndRuntimeHardeningV13887Tests(unittest.TestCase):
             flags=re.S,
         )
         self.assertIsNotNone(rollback)
-        self.assertIn("SLOWLINK_WEB_PORT=$ORIGINAL_PORT", rollback.group("body"))
-        self.assertIn("export SLOWLINK_WEB_PORT", rollback.group("body"))
+        rollback_body = rollback.group("body")
+        self.assertIn(
+            'save_web_access "$ORIGINAL_WEB_MODE" "$ORIGINAL_PORT" "$ORIGINAL_DOMAIN" "$ORIGINAL_BIND_HOST"',
+            rollback_body,
+        )
+        self.assertIn("SLOWLINK_WEB_MODE=$ORIGINAL_WEB_MODE", rollback_body)
+        self.assertIn("SLOWLINK_BIND_HOST=$ORIGINAL_BIND_HOST", rollback_body)
+        self.assertIn("SLOWLINK_WEB_PORT=$ORIGINAL_PORT", rollback_body)
+        self.assertIn("SLOWLINK_DOMAIN=$ORIGINAL_DOMAIN", rollback_body)
+        self.assertIn(
+            "export SLOWLINK_WEB_MODE SLOWLINK_BIND_HOST SLOWLINK_WEB_PORT SLOWLINK_DOMAIN",
+            rollback_body,
+        )
 
         update_start = install.rfind('if [ "$UPDATE_ONLY" -eq 1 ]; then')
         self.assertGreaterEqual(update_start, 0)

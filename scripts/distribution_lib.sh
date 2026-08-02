@@ -5,7 +5,11 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/slowlink}"
 APP_SERVICE="${APP_SERVICE:-app}"
 APP_CONTAINER="${APP_CONTAINER:-slowlink_app}"
 REDIS_CONTAINER="${REDIS_CONTAINER:-slowlink_redis}"
+CADDY_SERVICE="${CADDY_SERVICE:-caddy}"
+CADDY_CONTAINER="${CADDY_CONTAINER:-slowlink_caddy}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-slowlink}"
 WATCHDOG_SERVICE="${WATCHDOG_SERVICE:-slowlink-watchdog.service}"
+DEFAULT_WEB_MODE="${DEFAULT_WEB_MODE:-http}"
 DEFAULT_WEB_PORT="${DEFAULT_WEB_PORT:-8080}"
 PROTECTED_PATHS='.env data sessions redis_data backups backup watchdog.log'
 PROTECTED_GLOBS='*.session *.session-journal *.sqlite *.sqlite3 *.db *.rdb *.log'
@@ -61,28 +65,113 @@ validate_web_port() {
   [ "$web_port_value" -ge 1 ] 2>/dev/null && [ "$web_port_value" -le 65535 ] 2>/dev/null
 }
 
-read_web_port() {
-  web_port_value=""
+validate_web_mode() {
+  case "${1:-}" in
+    http|https) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_web_domain() {
+  web_domain_value=${1:-}
+  [ -n "$web_domain_value" ] || return 1
+  [ "${#web_domain_value}" -le 253 ] || return 1
+  printf '%s\n' "$web_domain_value" | grep -Eq '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+}
+
+validate_web_bind_host() {
+  case "${1:-}" in
+    0.0.0.0|127.0.0.1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_https_app_port() {
+  validate_web_port "${1:-}" || return 1
+  case "$1" in
+    80|443) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+read_env_value() {
+  env_key=$1
+  env_value=""
   if [ -f "$INSTALL_DIR/.env" ]; then
-    web_port_value=$(sed -n 's/^[[:space:]]*SLOWLINK_WEB_PORT[[:space:]]*=[[:space:]]*//p' "$INSTALL_DIR/.env" | tail -n 1 | tr -d '[:space:]')
+    env_value=$(sed -n "s/^[[:space:]]*$env_key[[:space:]]*=[[:space:]]*//p" "$INSTALL_DIR/.env" | tail -n 1 | tr -d '[:space:]')
   fi
+  printf '%s\n' "$env_value"
+}
+
+read_web_mode() {
+  web_mode_value=$(read_env_value SLOWLINK_WEB_MODE)
+  if ! validate_web_mode "$web_mode_value"; then
+    web_mode_value=$DEFAULT_WEB_MODE
+  fi
+  printf '%s\n' "$web_mode_value"
+}
+
+read_web_domain() {
+  web_domain_value=$(read_env_value SLOWLINK_DOMAIN)
+  if ! validate_web_domain "$web_domain_value"; then
+    web_domain_value=""
+  fi
+  printf '%s\n' "$web_domain_value"
+}
+
+read_web_bind_host() {
+  web_mode_value=$(read_web_mode)
+  web_bind_host=$(read_env_value SLOWLINK_BIND_HOST)
+  if [ "$web_mode_value" = "https" ]; then
+    printf '127.0.0.1\n'
+  elif validate_web_bind_host "$web_bind_host"; then
+    printf '%s\n' "$web_bind_host"
+  else
+    printf '0.0.0.0\n'
+  fi
+}
+
+read_web_port() {
+  web_port_value=$(read_env_value SLOWLINK_WEB_PORT)
   if ! validate_web_port "$web_port_value"; then
     web_port_value=$DEFAULT_WEB_PORT
   fi
   printf '%s\n' "$web_port_value"
 }
 
-save_web_port() {
-  web_port_value=$1
+save_web_access() {
+  web_mode_value=$1
+  web_port_value=$2
+  web_domain_value=${3:-}
+  requested_bind_host=${4:-}
+  validate_web_mode "$web_mode_value" || die "网页访问模式无效：$web_mode_value"
   validate_web_port "$web_port_value" || die "网页端口无效：$web_port_value"
-  mkdir -p "$INSTALL_DIR" || die "无法创建安装目录"
-  web_port_tmp=$(mktemp "$INSTALL_DIR/.env.tmp.XXXXXX") || die "无法创建端口配置临时文件"
-  if [ -f "$INSTALL_DIR/.env" ]; then
-    awk '!/^[[:space:]]*SLOWLINK_WEB_PORT[[:space:]]*=/' "$INSTALL_DIR/.env" > "$web_port_tmp" || die "读取现有端口配置失败"
+  if [ "$web_mode_value" = "https" ]; then
+    validate_web_domain "$web_domain_value" || die "HTTPS 域名无效：$web_domain_value"
+    validate_https_app_port "$web_port_value" || die "HTTPS 模式下应用端口不能使用 80 或 443"
+    web_bind_host=127.0.0.1
+  else
+    web_bind_host=${requested_bind_host:-0.0.0.0}
+    validate_web_bind_host "$web_bind_host" || die "网页绑定地址无效：$web_bind_host"
+    web_domain_value=""
   fi
-  printf 'SLOWLINK_WEB_PORT=%s\n' "$web_port_value" >> "$web_port_tmp" || die "写入网页端口失败"
-  chmod 600 "$web_port_tmp" || die "设置端口配置权限失败"
-  mv -f "$web_port_tmp" "$INSTALL_DIR/.env" || die "保存网页端口失败"
+  mkdir -p "$INSTALL_DIR" || die "无法创建安装目录"
+  web_port_tmp=$(mktemp "$INSTALL_DIR/.env.tmp.XXXXXX") || die "无法创建网页配置临时文件"
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    awk '!/^[[:space:]]*SLOWLINK_WEB_MODE[[:space:]]*=/ && !/^[[:space:]]*SLOWLINK_BIND_HOST[[:space:]]*=/ && !/^[[:space:]]*SLOWLINK_WEB_PORT[[:space:]]*=/ && !/^[[:space:]]*SLOWLINK_DOMAIN[[:space:]]*=/' "$INSTALL_DIR/.env" > "$web_port_tmp" || die "读取现有网页配置失败"
+  fi
+  {
+    printf 'SLOWLINK_WEB_MODE=%s\n' "$web_mode_value"
+    printf 'SLOWLINK_BIND_HOST=%s\n' "$web_bind_host"
+    printf 'SLOWLINK_WEB_PORT=%s\n' "$web_port_value"
+    printf 'SLOWLINK_DOMAIN=%s\n' "$web_domain_value"
+  } >> "$web_port_tmp" || die "写入网页配置失败"
+  chmod 600 "$web_port_tmp" || die "设置网页配置权限失败"
+  mv -f "$web_port_tmp" "$INSTALL_DIR/.env" || die "保存网页配置失败"
+}
+
+save_web_port() {
+  save_web_access "$(read_web_mode)" "$1" "$(read_web_domain)" "$(read_web_bind_host)"
 }
 
 port_in_use() {
@@ -92,8 +181,30 @@ port_in_use() {
 
 app_owns_port() {
   web_port_value=$1
-  docker inspect "$APP_CONTAINER" >/dev/null 2>&1 || return 1
+  [ "$(docker inspect "$APP_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ] || return 1
+  [ "$(docker inspect "$APP_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)" = "$COMPOSE_PROJECT" ] || return 1
+  [ "$(docker inspect "$APP_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)" = "app" ] || return 1
   docker port "$APP_CONTAINER" 8080/tcp 2>/dev/null | awk -F: -v port="$web_port_value" '$NF == port { found=1 } END { exit(found ? 0 : 1) }'
+}
+
+caddy_is_running() {
+  [ "$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ] || return 1
+  [ "$(docker inspect "$CADDY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)" = "$COMPOSE_PROJECT" ] || return 1
+  [ "$(docker inspect "$CADDY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)" = "caddy" ]
+}
+
+caddy_owns_port() {
+  caddy_port_value=$1
+  caddy_protocol=${2:-tcp}
+  [ "$(docker inspect "$CADDY_CONTAINER" --format '{{.State.Running}}' 2>/dev/null || true)" = "true" ] || return 1
+  [ "$(docker inspect "$CADDY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)" = "$COMPOSE_PROJECT" ] || return 1
+  [ "$(docker inspect "$CADDY_CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)" = "caddy" ] || return 1
+  docker port "$CADDY_CONTAINER" "$caddy_port_value/$caddy_protocol" 2>/dev/null | grep -Eq ":$caddy_port_value$"
+}
+
+udp_port_in_use() {
+  web_port_value=$1
+  ss -lunH 2>/dev/null | awk -v suffix=":$web_port_value" '$4 ~ suffix "$" { found=1 } END { exit(found ? 0 : 1) }'
 }
 
 describe_port_owner() {
@@ -119,6 +230,31 @@ assert_web_port_available() {
     return 1
   fi
   return 0
+}
+
+assert_https_ports_available() {
+  for https_port in 80 443; do
+    if port_in_use "$https_port" && ! caddy_owns_port "$https_port" tcp; then
+      warn "HTTPS 所需端口已被占用：$https_port"
+      warn "占用详情：$(describe_port_owner "$https_port")"
+      warn "不会停止现有服务，请先释放 80/443 端口或改用 HTTP 模式"
+      return 1
+    fi
+  done
+  if udp_port_in_use 443 && ! caddy_owns_port 443 udp; then
+    warn "HTTPS 的 UDP 443 端口已被其他服务占用"
+    warn "不会停止现有服务，请先释放 UDP 443 或改用 HTTP 模式"
+    return 1
+  fi
+  return 0
+}
+
+web_access_url() {
+  if [ "$(read_web_mode)" = "https" ]; then
+    printf 'https://%s\n' "$(read_web_domain)"
+  else
+    printf 'http://服务器IP:%s\n' "$(read_web_port)"
+  fi
 }
 
 find_available_port() {
@@ -300,6 +436,49 @@ wait_for_app_health() {
   return 1
 }
 
+wait_for_https_health() {
+  timeout_seconds=${1:-180}
+  web_domain_value=$(read_web_domain)
+  validate_web_domain "$web_domain_value" || return 1
+  https_deadline=$(($(date +%s) + timeout_seconds))
+  while [ "$(date +%s)" -lt "$https_deadline" ]; do
+    if curl -fsS --connect-timeout 5 --max-time 10 --resolve "$web_domain_value:443:127.0.0.1" "https://$web_domain_value/health" 2>/dev/null | grep -q '"status":"ok"'; then
+      return 0
+    fi
+    if ! caddy_is_running; then
+      return 1
+    fi
+    sleep 3
+  done
+  return 1
+}
+
+ensure_web_proxy() {
+  web_mode_value=$(read_web_mode)
+  cd "$INSTALL_DIR"
+  if [ "$web_mode_value" = "http" ]; then
+    if docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1; then
+      log "停用 SlowLink HTTPS 代理"
+      docker rm -f "$CADDY_CONTAINER" >/dev/null || return 1
+    fi
+    return 0
+  fi
+
+  web_domain_value=$(read_web_domain)
+  validate_web_domain "$web_domain_value" || {
+    warn "HTTPS 域名配置无效"
+    return 1
+  }
+  assert_https_ports_available || return 1
+  current_caddy_domain=$(docker inspect "$CADDY_CONTAINER" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | sed -n 's/^SLOWLINK_DOMAIN=//p' | tail -n 1 || true)
+  if caddy_is_running && [ "$current_caddy_domain" = "$web_domain_value" ]; then
+    log "HTTPS 代理已运行，保持现有 Caddy 容器"
+    return 0
+  fi
+  log "启动 SlowLink HTTPS 代理：$web_domain_value"
+  docker compose --profile https up -d --no-deps "$CADDY_SERVICE" || return 1
+}
+
 verify_container_version() {
   expected_version=$(cat "$INSTALL_DIR/VERSION")
   actual_version=$(docker exec "$APP_CONTAINER" python -c 'import config; print(config.APP_VERSION)' 2>/dev/null || true)
@@ -311,6 +490,10 @@ show_diagnostics() {
   docker compose -f "$INSTALL_DIR/docker-compose.yml" config 2>&1 | tail -n 40 >&2 || true
   docker inspect "$APP_CONTAINER" --format '容器状态={{.State.Status}} 健康={{if .State.Health}}{{.State.Health.Status}}{{else}}无{{end}} OOM={{.State.OOMKilled}} 错误={{.State.Error}}' 2>&1 >&2 || true
   docker logs --tail 120 "$APP_CONTAINER" 2>&1 >&2 || true
+  if docker inspect "$CADDY_CONTAINER" >/dev/null 2>&1; then
+    docker inspect "$CADDY_CONTAINER" --format 'HTTPS代理={{.State.Status}} 错误={{.State.Error}}' 2>&1 >&2 || true
+    docker logs --tail 80 "$CADDY_CONTAINER" 2>&1 >&2 || true
+  fi
 }
 
 verify_installation() {
@@ -318,6 +501,9 @@ verify_installation() {
   verify_container_version || return 1
   docker exec "$REDIS_CONTAINER" redis-cli --raw PING 2>/dev/null | grep -qx PONG || return 1
   curl -fsS "http://127.0.0.1:$web_port_value/health" 2>/dev/null | grep -q '"status":"ok"' || return 1
+  if [ "$(read_web_mode)" = "https" ]; then
+    wait_for_https_health 180 || return 1
+  fi
   [ "$(systemctl is-active "$WATCHDOG_SERVICE" 2>/dev/null || true)" = "active" ] || return 1
   return 0
 }

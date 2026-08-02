@@ -31,7 +31,7 @@ services:
       retries: 3
       start_period: 15s
     ports:
-      - "${SLOWLINK_WEB_PORT:-8080}:8080"
+      - "${SLOWLINK_BIND_HOST:-0.0.0.0}:${SLOWLINK_WEB_PORT:-8080}:8080"
     volumes:
       - ./data/sessions:/app/sessions
     environment:
@@ -41,5 +41,28 @@ services:
       - WEB_PORT=8080
       - SESSION_PATH=/app/sessions/slowlink
 
+  caddy:
+    image: caddy:2.10.2-alpine
+    container_name: slowlink_caddy
+    profiles: ["https"]
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    environment:
+      SLOWLINK_DOMAIN: "${SLOWLINK_DOMAIN:-}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   redis_data:
+  caddy_data:
+  caddy_config:
