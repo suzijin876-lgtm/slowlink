@@ -2,7 +2,7 @@ import re
 
 
 INVITE_PATH_CODE_RE = re.compile(
-    r"https?://[^\s/?#]+/invite/([A-Za-z0-9]{6})"
+    r"https?://[^\s/?#]+/invite/([A-Za-z0-9]{6}(?:[A-Za-z0-9]{2})?)"
     r"(?=$|[?#\s]|[，。！？？；：、）】]|[,.;:)\]}>`~*])",
     re.I,
 )

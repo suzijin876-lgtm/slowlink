@@ -485,7 +485,7 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
     if invite_path_code and not trigger_only:
         return {
             "index": -1,
-            "name": "网页 /invite/ 六位注册码",
+            "name": "网页 /invite/ 六位或八位注册码",
             "pattern": "web_invite_path_code",
             "code": invite_path_code,
             "identity": "url_invite:" + invite_path_code,
