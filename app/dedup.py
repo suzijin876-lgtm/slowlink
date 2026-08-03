@@ -5,6 +5,7 @@ import time
 import unicodedata
 from typing import Any
 
+from invite_path_codes import extract_invite_path_codes
 from redis_store import r, sha, format_time
 from telegram_start_links import extract_telegram_start_register_renew_codes
 
@@ -368,6 +369,13 @@ def _register_renew_code_fingerprints(text: str) -> list[str]:
     return sorted(fingerprints)
 
 
+def _invite_path_code_fingerprints(text: str) -> list[str]:
+    return sorted(
+        "ipc" + hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
+        for code in extract_invite_path_codes(text)
+    )
+
+
 def _is_probable_source_line(line: str) -> bool:
     raw = (line or "").strip()
     if not raw:
@@ -392,6 +400,7 @@ def normalize_for_text_dedup(text: str) -> str:
     raw = raw.replace("\r\n", "\n").replace("\r", "\n")
     raw = re.sub(r"[\u200b\u200c\u200d\ufeff\u2060]", "", raw)
     register_code_fingerprints = _register_renew_code_fingerprints(raw)
+    invite_path_code_fingerprints = _invite_path_code_fingerprints(raw)
 
     # ---- Dynamic-content normalization (order matters) ----
 
@@ -435,6 +444,8 @@ def normalize_for_text_dedup(text: str) -> str:
     base = re.sub(r"t\.me/\S+", " [URL] ", base, flags=re.I)
     if register_code_fingerprints:
         base += "\nregister renew code fingerprints " + " ".join(register_code_fingerprints)
+    if invite_path_code_fingerprints:
+        base += "\ninvite path code fingerprints " + " ".join(invite_path_code_fingerprints)
 
     # Normalize UUIDs -> [UUID]
     base = re.sub(r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b", " [UUID] ", base, flags=re.I)

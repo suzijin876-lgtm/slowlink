@@ -4,6 +4,7 @@ import time
 from typing import Any
 
 from redis_store import get_json, set_json
+from invite_path_codes import extract_first_invite_path_code
 from telegram_start_links import (
     extract_first_telegram_start_register_renew_code,
 )
@@ -480,6 +481,21 @@ def extract_code_detail(text: str, trigger_only: bool = False, safe_only: bool =
                 "safe": safe,
                 "safe_reason": safe_reason,
             }
+    invite_path_code = extract_first_invite_path_code(raw)
+    if invite_path_code and not trigger_only:
+        return {
+            "index": -1,
+            "name": "网页 /invite/ 六位注册码",
+            "pattern": "web_invite_path_code",
+            "code": invite_path_code,
+            "identity": "url_invite:" + invite_path_code,
+            "fast": True,
+            "trigger": False,
+            "can_trigger": False,
+            "strict_context": False,
+            "safe": True,
+            "safe_reason": "仅辅助去重，需用户正则命中",
+        }
     direct_whitelist = _extract_whitelist_code(raw)
     if direct_whitelist:
         # Whitelist is an extraction/dedup format only. The main matcher must
