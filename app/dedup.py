@@ -87,6 +87,10 @@ SCRATCH_PRIZE_RE = re.compile(
     r"(?<![A-Za-z0-9])([+-]?)\s*(\d+(?:\.\d+)?)\s*币\s*(?:[x×*]\s*(\d+))?",
     re.I,
 )
+SCRATCH_VOUCHER_RE = re.compile(
+    r"(?<!\d)(\d+(?:\.\d+)?)元代金券(?:x(\d+))?",
+    re.I,
+)
 LOTTERY_TEMPLATE_WINDOW_SECONDS = 10 * 60
 
 
@@ -238,6 +242,26 @@ def _extract_lottery_title(raw: str) -> str:
     return ""
 
 
+def _extract_single_scratch_voucher(raw: str) -> str:
+    prizes = _extract_lottery_section_values(raw, ("奖品", "奖品内容"))
+    if len(prizes) != 1:
+        return ""
+
+    value = prizes[0]
+    matches = list(SCRATCH_VOUCHER_RE.finditer(value))
+    if len(matches) != 1:
+        return ""
+    match = matches[0]
+    prefix = value[:match.start()]
+    suffix = value[match.end():]
+    if suffix or (prefix and not re.fullmatch(r"[a-z\u3400-\u9fff]+", prefix, flags=re.I)):
+        return ""
+
+    amount = match.group(1)
+    normalized_amount = amount.rstrip("0").rstrip(".") if "." in amount else amount
+    return f"{normalized_amount}元代金券x{int(match.group(2) or 1)}"
+
+
 def extract_lottery_template_identity(text: str, message_link: str = "", source: str = "") -> str:
     """Correlate high-confidence lottery template variants for a short window."""
     raw = unicodedata.normalize("NFKC", text or "")
@@ -275,6 +299,12 @@ def extract_lottery_template_identity(text: str, message_link: str = "", source:
 
     if "刮刮乐" not in raw:
         return ""
+
+    if classify_activity(raw) in {"lottery", "joint_lottery"}:
+        voucher = _extract_single_scratch_voucher(raw)
+        if voucher:
+            return f"scratch-voucher:{voucher}"
+
     source_identity = _lottery_source_identity(message_link, source)
     if not source_identity:
         return ""
@@ -676,5 +706,4 @@ def release_dedup(dedup_id: str) -> bool:
     r.delete(*[k for k in set(keys) if k])
     _push_recent({"action": "release", "dedup_id": dedup_id, "reason": "手动解除去重"})
     return True
-
 
