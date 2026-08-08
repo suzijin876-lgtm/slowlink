@@ -70,7 +70,7 @@ def _push_recent(item: dict[str, Any], limit: int = 120) -> None:
 # ---- Activity classification ----
 
 REGISTER_KWS = ["开放注册", "自由注册", "开放注册中", "注册开放", "开注", "开注中", "开放名额", "register", "renew"]
-LOTTERY_KWS = ["抽奖", "抽奖开始", "抽奖开始啦", "抽奖活动已开始", "奖品内容", "抽奖信息", "新的抽奖已经创建"]
+LOTTERY_KWS = ["抽奖", "抽奖开始", "抽奖开始啦", "抽奖活动已开始", "刮刮乐", "奖品内容", "抽奖信息", "新的抽奖已经创建"]
 JOINT_LOTTERY_KWS = ["联合抽奖", "发起了通用抽奖活动", "通用抽奖", "多个群", "多个频道", "共同抽奖"]
 LONG_TERM_KWS = ["长期活动", "持续多日", "长期抽奖", "延期", "延迟开奖", "开奖延期", "活动延期", "持续到", "截止", "截至"]
 INVITE_KWS = ["邀请码", "注册码", "注册代码", "邀请链接", "注册链接", "register?code", "INV-", "已为您生成", "生成了", "兑换码", "激活码"]
@@ -81,14 +81,6 @@ LOTTERY_ID_RE = re.compile(
 )
 LOTTERY_SEED_RE = re.compile(
     r"(?:随机种子(?:哈希)?|random\s+seed(?:\s+hash)?)\s*[:：]\s*([a-f0-9]{16,128})",
-    re.I,
-)
-SCRATCH_PRIZE_RE = re.compile(
-    r"(?<![A-Za-z0-9])([+-]?)\s*(\d+(?:\.\d+)?)\s*币\s*(?:[x×*]\s*(\d+))?",
-    re.I,
-)
-SCRATCH_VOUCHER_RE = re.compile(
-    r"(?<!\d)(\d+(?:\.\d+)?)元代金券(?:x(\d+))?",
     re.I,
 )
 LOTTERY_TEMPLATE_WINDOW_SECONDS = 10 * 60
@@ -129,19 +121,6 @@ def extract_lottery_identity(text: str) -> str:
     if match:
         return "seed:" + match.group(1).lower()
     return ""
-
-
-def _lottery_source_identity(message_link: str, source: str) -> str:
-    match = re.search(
-        r"(?:https?://)?t\.me/(c/\d+|[A-Za-z0-9_]+)(?:/\d+)?(?:[/?#]|$)",
-        message_link or "",
-        flags=re.I,
-    )
-    if match:
-        return match.group(1).lower()
-    normalized = unicodedata.normalize("NFKC", source or "").lower()
-    normalized = re.sub(r"[^a-z0-9\u3400-\u9fff]+", "", normalized)
-    return normalized[:80]
 
 
 def _normalize_lottery_identity_value(value: str) -> str:
@@ -227,6 +206,8 @@ def _extract_lottery_section_values(raw: str, labels: tuple[str, ...]) -> list[s
                 break
             if re.fullmatch(r"[━─—=\-]+", stripped) or "祝所有参与者好运" in stripped:
                 break
+            if re.search(r"(?:现在|当前)[^\n]{0,40}参与|参与[^\n]{0,40}抽奖|祝[^\n]{0,40}好运", next_candidate):
+                break
             value = _normalize_lottery_identity_value(next_candidate)
             if value:
                 values.append(value)
@@ -242,24 +223,34 @@ def _extract_lottery_title(raw: str) -> str:
     return ""
 
 
-def _extract_single_scratch_voucher(raw: str) -> str:
+def _normalize_scratch_prize_value(value: str) -> str:
+    normalized = _normalize_lottery_identity_value(value)
+    quantity_match = re.search(r"x(\d+)$", normalized, flags=re.I)
+    quantity = int(quantity_match.group(1) or 1) if quantity_match else 1
+    prize = normalized[:quantity_match.start()] if quantity_match else normalized
+    if not prize:
+        return ""
+
+    # Drop a descriptive prefix before a leading numeric prize, while keeping
+    # signed coin prizes and code-like hyphenated values intact.
+    first_digit = re.search(r"\d", prize)
+    if (
+        first_digit
+        and first_digit.start() > 0
+        and not prize.startswith(("+", "-"))
+        and not re.search(r"[-_]", prize[:first_digit.start()])
+    ):
+        prize = prize[first_digit.start():]
+    return f"{prize}x{quantity}"
+
+
+def _extract_scratch_prizes(raw: str) -> list[str]:
     prizes = _extract_lottery_section_values(raw, ("奖品", "奖品内容"))
-    if len(prizes) != 1:
-        return ""
-
-    value = prizes[0]
-    matches = list(SCRATCH_VOUCHER_RE.finditer(value))
-    if len(matches) != 1:
-        return ""
-    match = matches[0]
-    prefix = value[:match.start()]
-    suffix = value[match.end():]
-    if suffix or (prefix and not re.fullmatch(r"[a-z\u3400-\u9fff]+", prefix, flags=re.I)):
-        return ""
-
-    amount = match.group(1)
-    normalized_amount = amount.rstrip("0").rstrip(".") if "." in amount else amount
-    return f"{normalized_amount}元代金券x{int(match.group(2) or 1)}"
+    normalized = {
+        _normalize_scratch_prize_value(prize)
+        for prize in prizes
+    }
+    return sorted(prize for prize in normalized if prize)
 
 
 def extract_lottery_template_identity(text: str, message_link: str = "", source: str = "") -> str:
@@ -301,22 +292,11 @@ def extract_lottery_template_identity(text: str, message_link: str = "", source:
         return ""
 
     if classify_activity(raw) in {"lottery", "joint_lottery"}:
-        voucher = _extract_single_scratch_voucher(raw)
-        if voucher:
-            return f"scratch-voucher:{voucher}"
+        prizes = _extract_scratch_prizes(raw)
+        if prizes:
+            return f"scratch-event:prizes:{'|'.join(prizes)}"
 
-    source_identity = _lottery_source_identity(message_link, source)
-    if not source_identity:
-        return ""
-
-    prizes: list[str] = []
-    for sign, amount, quantity in SCRATCH_PRIZE_RE.findall(raw):
-        normalized_amount = amount.rstrip("0").rstrip(".") if "." in amount else amount
-        prizes.append(f"{sign}{normalized_amount}币x{int(quantity or 1)}")
-    if len(prizes) < 2:
-        return ""
-
-    return f"source:{source_identity}|mode:刮刮乐|prizes:{'|'.join(sorted(prizes))}"
+    return ""
 
 
 def ttl_minutes_for_activity(activity: str, fallback: int | None = None) -> int:
@@ -706,4 +686,3 @@ def release_dedup(dedup_id: str) -> bool:
     r.delete(*[k for k in set(keys) if k])
     _push_recent({"action": "release", "dedup_id": dedup_id, "reason": "手动解除去重"})
     return True
-

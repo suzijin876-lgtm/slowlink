@@ -47,6 +47,20 @@ NAMED_VOUCHER_LOTTERY = """高德打车10元代金券
 🍀 祝所有参与者好运！
 """
 
+REGISTER_LOTTERY_DETAILED = """🎁 抽奖活动已开始！
+🎰 开奖模式：刮刮乐
+🎁 奖品：
+  ▸ 公益服注册码 x1
+📣 发布群组：
+  ▸ 小姨子
+"""
+
+REGISTER_LOTTERY_COMPACT = """🎁 抽奖开始啦
+方式：刮刮乐
+奖品：公益服注册码
+现在可以参与这场抽奖啦，祝你好运！
+"""
+
 
 class FakePipeline:
     def __init__(self, client):
@@ -134,7 +148,7 @@ def load_dedup():
             sys.modules["redis_store"] = old
 
 
-class ScratchVoucherDedupV1395Tests(unittest.TestCase):
+class GlobalScratchDedupV1396Tests(unittest.TestCase):
     def test_three_real_templates_share_one_lottery_identity(self):
         dedup, _client = load_dedup()
 
@@ -146,7 +160,52 @@ class ScratchVoucherDedupV1395Tests(unittest.TestCase):
 
         identities = {profile["lottery_template_identity"] for profile in profiles}
         self.assertEqual(len(identities), 1)
-        self.assertTrue(next(iter(identities)).startswith("scratch-voucher:"))
+        self.assertTrue(next(iter(identities)).startswith("scratch-event:"))
+
+    def test_registration_code_prize_uses_the_same_global_identity(self):
+        dedup, _client = load_dedup()
+
+        detailed = dedup.build_profile(
+            REGISTER_LOTTERY_DETAILED,
+            "https://t.me/xyz_emby/568410",
+            "小姨子",
+        )
+        compact = dedup.build_profile(
+            REGISTER_LOTTERY_COMPACT,
+            "https://t.me/xyz_push/790",
+            "小姨子推送",
+        )
+
+        self.assertEqual(
+            detailed["lottery_template_identity"],
+            compact["lottery_template_identity"],
+        )
+        self.assertTrue(detailed["lottery_template_identity"].startswith("scratch-event:"))
+
+    def test_multiple_non_money_prizes_are_normalized_as_one_global_identity(self):
+        dedup, _client = load_dedup()
+        first = REGISTER_LOTTERY_DETAILED.replace(
+            "  ▸ 公益服注册码 x1",
+            "  ▸ 公益服注册码 x1\n  ▸ 公益服白名单码 x1",
+        )
+        second = REGISTER_LOTTERY_COMPACT.replace(
+            "奖品：公益服注册码",
+            "奖品：\n公益服白名单码 x1\n公益服注册码 x1\n🍀 祝所有参与者好运！",
+        )
+
+        first_identity = dedup.build_profile(first)["lottery_template_identity"]
+        second_identity = dedup.build_profile(second)["lottery_template_identity"]
+
+        self.assertEqual(first_identity, second_identity)
+
+    def test_scratch_mode_without_the_word_lottery_is_still_classified(self):
+        dedup, _client = load_dedup()
+        scratch_only = REGISTER_LOTTERY_DETAILED.replace("🎁 抽奖活动已开始！\n", "")
+
+        profile = dedup.build_profile(scratch_only)
+
+        self.assertEqual(profile["activity"], "lottery")
+        self.assertTrue(profile["lottery_template_identity"].startswith("scratch-event:"))
 
     def test_later_cross_template_posts_are_blocked_within_ten_minutes(self):
         dedup, _client = load_dedup()

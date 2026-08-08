@@ -167,7 +167,7 @@ class LotteryTemplateFallbackV13881Tests(unittest.TestCase):
         self.assertTrue(second_duplicate)
         self.assertIn("同一抽奖的不同模板", reason)
 
-    def test_same_prizes_from_different_sources_are_not_blocked(self):
+    def test_same_prizes_from_different_sources_are_blocked_globally(self):
         dedup, _client = load_dedup()
 
         first_duplicate, _reason, _profile = dedup.check_and_mark(
@@ -186,7 +186,8 @@ class LotteryTemplateFallbackV13881Tests(unittest.TestCase):
         )
 
         self.assertFalse(first_duplicate)
-        self.assertFalse(second_duplicate)
+        self.assertTrue(second_duplicate)
+        self.assertIn("同一抽奖的不同模板", _reason)
 
     def test_changed_prize_list_is_not_blocked(self):
         dedup, _client = load_dedup()
