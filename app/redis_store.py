@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -13,6 +14,18 @@ from config import REDIS_HOST, REDIS_PORT, LISTENER_WORKERS
 r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True, socket_connect_timeout=5, socket_keepalive=True, retry_on_timeout=True, health_check_interval=30)
 _TIMEZONE_CACHE = {"ts": None, "value": "Asia/Shanghai"}
 _TIMEZONE_CACHE_TTL = 60.0
+_BATCH_BUFFER: dict[str, list] = {
+    "events": [],
+    "hits": [],
+    "fails": [],
+    "perf_events": [],
+    "daily": [],
+}
+_BATCH_LOCK = threading.Lock()
+_BATCH_FLUSHING = False
+_BATCH_THREAD_STARTED = False
+_BATCH_MAX_BUFFER = 1000
+_BATCH_FLUSH_INTERVAL = 0.5
 
 LEGACY_PURE_CODE_TRIGGER_RULE = r"^(?!.*码使用)[^-]+-\d+-(?:Register|Renew)_.+$"
 LEGACY_SAFE_PURE_CODE_TRIGGER_RULE = (
@@ -155,6 +168,111 @@ def set_json(key: str, value: Any) -> None:
     r.set(key, json.dumps(value, ensure_ascii=False))
 
 
+def _ensure_batch_thread() -> None:
+    global _BATCH_THREAD_STARTED
+    if _BATCH_THREAD_STARTED:
+        return
+    with _BATCH_LOCK:
+        if _BATCH_THREAD_STARTED:
+            return
+        _BATCH_THREAD_STARTED = True
+    threading.Thread(
+        target=_batch_flush_loop,
+        daemon=True,
+        name="slowlink-redis-batch-flush",
+    ).start()
+
+
+def _batch_flush_loop() -> None:
+    while True:
+        time.sleep(_BATCH_FLUSH_INTERVAL)
+        flush_batch_records()
+
+
+def _daily_stat_key() -> str:
+    try:
+        tz_name = str(_TIMEZONE_CACHE.get("value") or "Asia/Shanghai")
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Shanghai")
+    return "daily_stats:" + datetime.now(tz).strftime("%Y-%m-%d")
+
+
+def _hit_category(status: Any) -> str:
+    text = str(status or "")
+    if "重复跳过" in text:
+        return "duplicate"
+    if "命中但发送失败" in text:
+        return "send_failed"
+    if "已转发" in text:
+        return "forwarded"
+    if "排除来源" in text:
+        return "excluded"
+    return "hit"
+
+
+def _enqueue_record(key: str, raw: str, limit: int) -> None:
+    with _BATCH_LOCK:
+        items = _BATCH_BUFFER.setdefault(key, [])
+        if key == "daily":
+            items.append(str(raw))
+        else:
+            items.append((raw, int(limit)))
+        size = len(items)
+        if len(items) > _BATCH_MAX_BUFFER:
+            del items[: len(items) - _BATCH_MAX_BUFFER]
+    _ensure_batch_thread()
+    if size >= 50:
+        flush_batch_records()
+
+
+def _write_records_now(key: str, records: list[tuple[str, int]]) -> None:
+    if not records:
+        return
+    try:
+        pipe = r.pipeline()
+        for raw, limit in records:
+            pipe.lpush(key, raw)
+            pipe.ltrim(key, 0, limit - 1)
+        pipe.execute()
+    except Exception:
+        pass
+
+
+def flush_batch_records() -> None:
+    global _BATCH_FLUSHING
+    if _BATCH_FLUSHING:
+        return
+    _BATCH_FLUSHING = True
+    pending: dict[str, list] = {}
+    try:
+        with _BATCH_LOCK:
+            for key in list(_BATCH_BUFFER):
+                pending[key] = list(_BATCH_BUFFER.get(key) or [])
+                _BATCH_BUFFER[key] = []
+        if not any(pending.values()):
+            return
+        try:
+            pipe = r.pipeline()
+            for key in ("events", "hits", "fails", "perf_events"):
+                for raw, limit in pending.get(key) or []:
+                    pipe.lpush(key, raw)
+                    pipe.ltrim(key, 0, limit - 1)
+            daily_key = _daily_stat_key()
+            for category in pending.get("daily") or []:
+                pipe.hincrby(daily_key, str(category), 1)
+            pipe.execute()
+        except Exception:
+            with _BATCH_LOCK:
+                for key, items in pending.items():
+                    combined = _BATCH_BUFFER.setdefault(key, []) + items
+                    if len(combined) > _BATCH_MAX_BUFFER:
+                        del combined[: len(combined) - _BATCH_MAX_BUFFER]
+                    _BATCH_BUFFER[key] = combined
+    finally:
+        _BATCH_FLUSHING = False
+
+
 def push_event(kind: str, message: str, extra: dict | None = None, limit: int = 300) -> None:
     item = {
         "time": format_time(),
@@ -163,16 +281,11 @@ def push_event(kind: str, message: str, extra: dict | None = None, limit: int = 
         "extra": extra or {},
     }
     log_line(kind, message, extra or None)
-    try:
-        pipe = r.pipeline()
-        pipe.lpush("events", json.dumps(item, ensure_ascii=False))
-        pipe.ltrim("events", 0, limit - 1)
-        pipe.execute()
-    except Exception:
-        pass
+    _enqueue_record("events", json.dumps(item, ensure_ascii=False), limit)
 
 
 def list_events(limit: int = 50) -> list[dict]:
+    flush_batch_records()
     items = []
     for raw in r.lrange("events", 0, limit - 1):
         try:
@@ -183,18 +296,13 @@ def list_events(limit: int = 50) -> list[dict]:
 
 
 def add_perf_event(item: dict, limit: int = 120) -> None:
-    try:
-        item = dict(item)
-        item.setdefault("time", format_time())
-        pipe = r.pipeline()
-        pipe.lpush("perf_events", json.dumps(item, ensure_ascii=False, default=str))
-        pipe.ltrim("perf_events", 0, limit - 1)
-        pipe.execute()
-    except Exception:
-        pass
+    item = dict(item)
+    item.setdefault("time", format_time())
+    _enqueue_record("perf_events", json.dumps(item, ensure_ascii=False, default=str), limit)
 
 
 def list_perf_events(limit: int = 30) -> list[dict]:
+    flush_batch_records()
     out = []
     for raw in r.lrange("perf_events", 0, limit - 1):
         try:
@@ -207,16 +315,12 @@ def list_perf_events(limit: int = 30) -> list[dict]:
 def add_hit(item: dict, limit: int = 300) -> None:
     item = dict(item)
     item.setdefault("time", format_time())
-    try:
-        pipe = r.pipeline()
-        pipe.lpush("hits", json.dumps(item, ensure_ascii=False))
-        pipe.ltrim("hits", 0, limit - 1)
-        pipe.execute()
-    except Exception:
-        pass
+    _enqueue_record("hits", json.dumps(item, ensure_ascii=False), limit)
+    _enqueue_record("daily", _hit_category(item.get("status")), 0)
 
 
 def list_hits(limit: int = 50) -> list[dict]:
+    flush_batch_records()
     out = []
     for raw in r.lrange("hits", 0, limit - 1):
         try:
@@ -234,16 +338,15 @@ def add_fail(item: dict, limit: int = 200, *, emit_log: bool = True) -> None:
             log_line("error", f"{item.get('stage', 'fail')}：{item.get('error', item)}", {k: v for k, v in item.items() if k not in {'error'}})
         except Exception:
             pass
-    try:
-        pipe = r.pipeline()
-        pipe.lpush("fails", json.dumps(item, ensure_ascii=False))
-        pipe.ltrim("fails", 0, limit - 1)
-        pipe.execute()
-    except Exception:
-        pass
+    raw = json.dumps(item, ensure_ascii=False)
+    if emit_log:
+        _enqueue_record("fails", raw, limit)
+    else:
+        _write_records_now("fails", [(raw, limit)])
 
 
 def list_fails(limit: int = 50) -> list[dict]:
+    flush_batch_records()
     out = []
     for raw in r.lrange("fails", 0, limit - 1):
         try:
@@ -251,6 +354,14 @@ def list_fails(limit: int = 50) -> list[dict]:
         except Exception:
             pass
     return out
+
+
+def daily_stats() -> dict[str, int]:
+    try:
+        raw = r.hgetall(_daily_stat_key())
+        return {str(k): int(v or 0) for k, v in (raw or {}).items()}
+    except Exception:
+        return {}
 
 
 def sha(text: str) -> str:
@@ -268,6 +379,7 @@ def ensure_defaults() -> None:
         "bot_status": "stopped",
         "listener_desired_state": "stopped",
         "dedup_similarity_enabled": "0",
+        "dedup_lottery_template_mode": "global",
         "worker_count": str(LISTENER_WORKERS),
     }
     for k, v in defaults.items():
@@ -398,6 +510,7 @@ def cache_stats() -> dict:
         "dedup_records": list_len("dedup:records"),
         "dialog_cache": len(get_json("dialog_cache", []) or []),
         "temp_cache": count_patterns(["tmp:*", "temp:*", "test:*", "runtime:*"]),
+        "daily_stats": daily_stats(),
     }
     _CACHED_STATS["ts"] = nt
     _CACHED_STATS["data"] = result

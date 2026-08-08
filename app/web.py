@@ -274,6 +274,14 @@ def _public_link_domain() -> str:
     return value if value in {"t.me", "telegram.me"} else "t.me"
 
 
+def _daily_stats_safe() -> dict:
+    try:
+        from redis_store import daily_stats
+        return daily_stats()
+    except Exception:
+        return {}
+
+
 def _state_payload(light: bool = False) -> dict:
     if light:
         return {
@@ -307,6 +315,7 @@ def _state_payload(light: bool = False) -> dict:
         "dedup_recent": list_dedup_recent(30),
         "cache_stats": cache_stats(),
         "heartbeat": _heartbeat_payload(),
+        "daily_stats": _daily_stats_safe(),
     }
     if not light:
         data["dialog_cache"] = dialogs
@@ -341,6 +350,7 @@ def _page_data() -> dict:
         "dedup_lottery_minutes": get("dedup_lottery_minutes", "720") or "720",
         "dedup_joint_lottery_minutes": get("dedup_joint_lottery_minutes", "4320") or "4320",
         "dedup_lottery_key_mode": get("dedup_lottery_key_mode", "id") or "id",
+        "dedup_lottery_template_mode": get("dedup_lottery_template_mode", "global") or "global",
         "dedup_long_term_minutes": get("dedup_long_term_minutes", "10080") or "10080",
         "dedup_other_minutes": get("dedup_other_minutes", "20") or "20",
         "events": list_events(30),
@@ -845,6 +855,10 @@ def save_dedup():
     if lottery_key_mode not in {"id", "id_keyword", "id_prize_keyword"}:
         lottery_key_mode = "id"
     set_value("dedup_lottery_key_mode", lottery_key_mode)
+    lottery_template_mode = request.form.get("dedup_lottery_template_mode", "global")
+    if lottery_template_mode not in {"global", "id", "off"}:
+        lottery_template_mode = "global"
+    set_value("dedup_lottery_template_mode", lottery_template_mode)
     allowed = {"0", "5", "10", "15", "20", "30", "60", "180", "360", "720", "1440", "4320", "10080", "20160"}
     fields = {
         "dedup_register_minutes": "20",
@@ -990,6 +1004,19 @@ def api_cache_stats():
     return jsonify({"ok": True, "cache_stats": cache_stats()})
 
 
+@app.get("/api/health_summary")
+def api_health_summary():
+    gate = require_login()
+    if gate:
+        return jsonify({"ok": False, "message": "未登录"}), 401
+    return jsonify({
+        "ok": True,
+        "daily_stats": _daily_stats_safe(),
+        "flow_stats": get_json("listener_flow_stats", {}) or {},
+        "cache_stats": cache_stats(),
+    })
+
+
 @app.get("/export_config")
 def export_config():
     gate = require_login()
@@ -1014,6 +1041,7 @@ def export_config():
             "lottery_minutes": get("dedup_lottery_minutes", "720") or "720",
             "joint_lottery_minutes": get("dedup_joint_lottery_minutes", "4320") or "4320",
             "lottery_key_mode": get("dedup_lottery_key_mode", "id") or "id",
+            "lottery_template_mode": get("dedup_lottery_template_mode", "global") or "global",
             "long_term_minutes": get("dedup_long_term_minutes", "10080") or "10080",
             "other_minutes": get("dedup_other_minutes", "20") or "20",
         },
@@ -1088,6 +1116,7 @@ def import_config():
                 "lottery_minutes": "dedup_lottery_minutes",
                 "joint_lottery_minutes": "dedup_joint_lottery_minutes",
                 "lottery_key_mode": "dedup_lottery_key_mode",
+                "lottery_template_mode": "dedup_lottery_template_mode",
                 "long_term_minutes": "dedup_long_term_minutes",
                 "other_minutes": "dedup_other_minutes",
             }

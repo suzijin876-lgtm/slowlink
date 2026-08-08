@@ -20,8 +20,9 @@ class PerfDiagnosticsV13859Tests(unittest.TestCase):
     def test_redis_store_has_bounded_perf_event_list(self):
         redis_store = read(APP / "redis_store.py")
         self.assertIn("def add_perf_event(item: dict, limit: int = 120) -> None:", redis_store)
-        self.assertIn('pipe.lpush("perf_events"', redis_store)
-        self.assertIn('pipe.ltrim("perf_events", 0, limit - 1)', redis_store)
+        self.assertIn('_enqueue_record("perf_events"', redis_store)
+        self.assertIn('pipe.lpush(key, raw)', redis_store)
+        self.assertIn('pipe.ltrim(key, 0, limit - 1)', redis_store)
         self.assertIn("def list_perf_events(limit: int = 30) -> list[dict]:", redis_store)
         self.assertIn('r.lrange("perf_events", 0, limit - 1)', redis_store)
         self.assertIn('list_len("perf_events")', redis_store)

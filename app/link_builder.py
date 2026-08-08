@@ -121,6 +121,67 @@ def build_entity_cache(dialogs) -> dict[str, object]:
     return cache
 
 
+def _entity_index_payload(entity) -> dict:
+    eid = getattr(entity, "id", None)
+    if eid is None:
+        return {}
+    access_hash = getattr(entity, "access_hash", None)
+    if access_hash is not None:
+        if (
+            getattr(entity, "broadcast", False)
+            or getattr(entity, "megagroup", False)
+            or getattr(entity, "first_name", None) is None
+        ):
+            kind = "channel"
+        else:
+            kind = "user"
+        return {"kind": kind, "id": int(eid), "access_hash": int(access_hash)}
+    return {"kind": "chat", "id": int(eid)}
+
+
+def build_entity_index(dialogs) -> dict[str, dict]:
+    """Persist a compact, JSON-safe mapping for fast listener startup."""
+    index: dict[str, dict] = {}
+    for dialog in dialogs or []:
+        entity = getattr(dialog, "entity", None)
+        if entity is None:
+            continue
+        payload = _entity_index_payload(entity)
+        if not payload:
+            continue
+        keys = set()
+        keys |= get_chat_keys(entity)
+        did = getattr(dialog, "id", None)
+        if did is not None:
+            keys |= dialog_id_variants(did)
+        for key in keys:
+            if key:
+                index[str(key).strip().lower()] = payload
+    return index
+
+
+def build_entity_cache_from_index(index: dict | None) -> dict[str, object]:
+    from telethon.tl.types import InputPeerChannel, InputPeerChat, InputPeerUser
+
+    cache: dict[str, object] = {}
+    for key, payload in (index or {}).items():
+        try:
+            kind = str(payload.get("kind") or "")
+            eid = int(payload.get("id") or 0)
+            if kind == "channel":
+                entity: object = InputPeerChannel(eid, int(payload.get("access_hash") or 0))
+            elif kind == "chat":
+                entity = InputPeerChat(eid)
+            elif kind == "user":
+                entity = InputPeerUser(eid, int(payload.get("access_hash") or 0))
+            else:
+                continue
+            cache[str(key).strip().lower()] = entity
+        except (TypeError, ValueError):
+            continue
+    return cache
+
+
 async def resolve_entity(client, value: str, cache: dict | None = None, refresh: bool = False):
     """Resolve @username, username, -100ID or plain channel id robustly.
 

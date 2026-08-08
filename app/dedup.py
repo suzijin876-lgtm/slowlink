@@ -26,10 +26,13 @@ META_PREFIX = "dedup:meta:"
 # Module-level TTL cache to avoid per-message Redis GET
 _TTL_CACHE: dict[str, tuple[float, int]] = {}
 _TTL_CACHE_TTL = 30.0
+_LOTTERY_TEMPLATE_MODE_CACHE: dict[str, object] = {"ts": 0.0, "value": "global"}
+LOTTERY_TEMPLATE_MODE_KEY = "dedup_lottery_template_mode"
 
 
 def clear_ttl_cache():
     _TTL_CACHE.clear()
+    _LOTTERY_TEMPLATE_MODE_CACHE.update({"ts": 0.0, "value": "global"})
 
 
 def _now() -> int:
@@ -108,6 +111,21 @@ def classify_activity(text: str) -> str:
 def ttl_policy_for_text(text: str) -> str:
     low = _lower(text)
     return "long_term" if any(kw.lower() in low for kw in LONG_TERM_KWS) else "normal"
+
+
+def lottery_template_dedup_mode() -> str:
+    now = time.time()
+    cached_ts = float(_LOTTERY_TEMPLATE_MODE_CACHE.get("ts") or 0)
+    if now - cached_ts <= _TTL_CACHE_TTL:
+        return str(_LOTTERY_TEMPLATE_MODE_CACHE.get("value") or "global")
+    try:
+        value = str(r.get(LOTTERY_TEMPLATE_MODE_KEY) or "global")
+    except Exception:
+        value = "global"
+    if value not in {"global", "id", "off"}:
+        value = "global"
+    _LOTTERY_TEMPLATE_MODE_CACHE.update({"ts": now, "value": value})
+    return value
 
 
 def extract_lottery_identity(text: str) -> str:
@@ -535,6 +553,8 @@ def check_and_mark(
     content_key = "dedup:" + profile["dedup_id"]
     link_key = "dedup:link:" + sha(message_link) if message_link else ""
     template_identity = profile.get("lottery_template_identity") or ""
+    if template_identity and lottery_template_dedup_mode() != "global":
+        template_identity = ""
     template_key = "dedup:lottery-template:" + sha(template_identity) if template_identity else ""
 
     real_ttl_minutes = ttl_minutes_for_profile(profile, ttl_minutes) if ttl_minutes is None else int(ttl_minutes)

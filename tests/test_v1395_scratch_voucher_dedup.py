@@ -244,6 +244,20 @@ class GlobalScratchDedupV1396Tests(unittest.TestCase):
 
         self.assertEqual(identity, "")
 
+    def test_lottery_template_mode_off_disables_global_correlation(self):
+        dedup, client = load_dedup()
+        client.values["dedup_lottery_template_mode"] = "off"
+
+        first_duplicate, _reason, _profile = dedup.check_and_mark(
+            DETAILED_VOUCHER_LOTTERY, "https://t.me/xyz_emby/568383", None, "strict", "小姨子"
+        )
+        second_duplicate, _reason, _profile = dedup.check_and_mark(
+            COMPACT_VOUCHER_LOTTERY, "https://t.me/xyz_push/786", None, "strict", "小姨子推送"
+        )
+
+        self.assertFalse(first_duplicate)
+        self.assertFalse(second_duplicate)
+
 
 if __name__ == "__main__":
     unittest.main()

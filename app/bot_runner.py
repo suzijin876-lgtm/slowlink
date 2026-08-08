@@ -11,6 +11,8 @@ from telethon.errors import FloodWaitError
 from config import SESSION_PATH, LISTENER_WORKERS, LOG_VERBOSE
 from dedup import check_and_mark, release_dedup
 from link_builder import (
+    build_entity_cache_from_index,
+    build_entity_index,
     build_message_link,
     get_chat_keys,
     normalize_chat_value,
@@ -20,7 +22,7 @@ from link_builder import (
 )
 from matcher import analyze_message, get_text
 from code_rules import extract_code_detail
-from redis_store import add_fail, add_hit, add_perf_event, format_time, get, get_json, log_line, push_event, r, set_value, sha, smembers
+from redis_store import add_fail, add_hit, add_perf_event, format_time, get, get_json, log_line, push_event, r, set_json, set_value, sha, smembers
 import json as _json
 from telegram_session_lock import SESSION_LOCK
 
@@ -30,6 +32,11 @@ TELEGRAM_DELAY_IMMEDIATE_RECONNECT_SECONDS = 60
 TELEGRAM_DELAY_RECONNECT_COUNT = 2
 TELEGRAM_DELAY_RECONNECT_COOLDOWN_SECONDS = 180
 PRIORITY_WORKER_COUNT = 1
+MIN_NORMAL_WORKERS = 1
+MAX_NORMAL_WORKERS = 3
+WORKER_EXPAND_NORMAL_QUEUE = 8
+WORKER_EXPAND_PRIORITY_QUEUE = 4
+WORKER_SHRINK_IDLE_SECONDS = 45.0
 
 
 class BotManager:
@@ -44,6 +51,9 @@ class BotManager:
         self.queue: Optional[asyncio.Queue] = None
         self.workers = []
         self._worker_specs = []
+        self._desired_normal_workers = MIN_NORMAL_WORKERS
+        self._base_normal_workers = MIN_NORMAL_WORKERS
+        self._worker_idle_since = None
         self._active_jobs = 0
         self._reconnect_in_progress = False
         self._set_cache = {}
@@ -53,6 +63,7 @@ class BotManager:
         self._last_message_time = 0.0
         self._last_trim_ts = 0.0
         self._last_heartbeat_log = 0.0
+        self._entity_cache_refreshed_ts = 0.0
         # Telegram push-delay self-healing state. Reconnect is deliberately
         # bounded by a cooldown so delayed bursts do not cause reconnect churn.
         self._telegram_delay_high_count = 0
@@ -120,6 +131,27 @@ class BotManager:
         self._source_cache.clear()
         self._str_cache.clear()
         self._monitor_filter_dirty = True
+
+    async def _refresh_entity_cache(self, client: TelegramClient, force: bool = False):
+        """Load the persisted entity index first, then fall back to get_dialogs."""
+        if not force:
+            try:
+                index = get_json("entity_index", {}) or {}
+                cached = build_entity_cache_from_index(index)
+                if cached:
+                    self.entity_cache = cached
+                    self._entity_cache_refreshed_ts = time.monotonic()
+                    return None
+            except Exception:
+                pass
+        dialogs = await client.get_dialogs(limit=None)
+        self.entity_cache = build_entity_cache(dialogs)
+        try:
+            set_json("entity_index", build_entity_index(dialogs))
+        except Exception:
+            pass
+        self._entity_cache_refreshed_ts = time.monotonic()
+        return dialogs
 
     def _refresh_monitor_peer_filter(self):
         monitors = self._cached_set("monitor_chats", ttl=0.0)
@@ -274,21 +306,64 @@ class BotManager:
     def _ensure_workers(self, client: TelegramClient) -> None:
         if not self._worker_specs:
             return
-        current = list(self.workers)
-        rebuilt = []
-        for index, spec in enumerate(self._worker_specs):
-            task = current[index] if index < len(current) else None
-            if task is None or task.done():
-                if task is not None and not task.cancelled():
-                    try:
-                        error = task.exception()
-                    except Exception as e:
-                        error = e
-                    if error:
-                        log_line("error", f"工作线程异常退出，正在补建：{spec[0]}-{spec[1]}：{error}")
-                task = self._create_worker_task(client, spec)
-            rebuilt.append(task)
-        self.workers = rebuilt
+        with self.lock:
+            current_by_spec = dict(zip(self._worker_specs, self.workers))
+            rebuilt = []
+            for spec in self._worker_specs:
+                task = current_by_spec.get(spec)
+                if task is None or task.done():
+                    if task is not None and not task.cancelled():
+                        try:
+                            error = task.exception()
+                        except Exception as e:
+                            error = e
+                        if error:
+                            log_line("error", f"工作线程异常退出，正在补建：{spec[0]}-{spec[1]}：{error}")
+                    task = self._create_worker_task(client, spec)
+                rebuilt.append(task)
+            self.workers = rebuilt
+
+    def _retire_worker_spec(self, spec: tuple[str, int]) -> None:
+        try:
+            with self.lock:
+                if spec in self._worker_specs:
+                    self._worker_specs.remove(spec)
+        except Exception:
+            pass
+
+    def _reconcile_worker_targets(self, client: TelegramClient) -> None:
+        if self.queue is None:
+            return
+        normal_q = self.queue.qsize()
+        priority_q = self.priority_queue.qsize() if self.priority_queue else 0
+        now = time.monotonic()
+        if (
+            normal_q >= WORKER_EXPAND_NORMAL_QUEUE
+            or priority_q >= WORKER_EXPAND_PRIORITY_QUEUE
+        ):
+            target = max(self._base_normal_workers, MAX_NORMAL_WORKERS)
+            self._worker_idle_since = None
+        else:
+            if self._worker_idle_since is None:
+                self._worker_idle_since = now
+            if (
+                normal_q == 0
+                and priority_q == 0
+                and self._active_jobs == 0
+                and now - self._worker_idle_since >= WORKER_SHRINK_IDLE_SECONDS
+            ):
+                target = max(MIN_NORMAL_WORKERS, self._base_normal_workers - 1)
+            else:
+                target = self._desired_normal_workers
+        target = max(MIN_NORMAL_WORKERS, min(MAX_NORMAL_WORKERS, target))
+        if target == self._desired_normal_workers:
+            return
+        if target > self._desired_normal_workers:
+            for worker_id in range(self._desired_normal_workers, target):
+                spec = ("normal", worker_id)
+                self._worker_specs.append(spec)
+                self.workers.append(self._create_worker_task(client, spec))
+        self._desired_normal_workers = target
 
     def start(self) -> str:
         with self.lock:
@@ -383,10 +458,13 @@ class BotManager:
 
         # Warm dialog/entity cache for -100ID resolving.
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
-        dialogs = await client.get_dialogs(limit=None)
-        self.entity_cache = build_entity_cache(dialogs)
+        dialogs = await self._refresh_entity_cache(client, force=False)
+        dialog_count = len(dialogs) if dialogs else len(get_json("dialog_cache", []) or [])
         self._refresh_monitor_peer_filter()
-        self._verbose_event("info", f"已刷新会话缓存：{len(dialogs)} 个，快速解析缓存：{len(self.entity_cache)} 个键")
+        if dialogs is not None:
+            self._verbose_event("info", f"已刷新会话缓存：{len(dialogs)} 个，快速解析缓存：{len(self.entity_cache)} 个键")
+        else:
+            self._verbose_event("info", f"已加载持久化实体缓存：{len(self.entity_cache)} 个键")
 
         me = await client.get_me()
         user = f"@{me.username}" if getattr(me, "username", None) else (getattr(me, "first_name", None) or str(me.id))
@@ -402,6 +480,9 @@ class BotManager:
             worker_count = LISTENER_WORKERS
         worker_count = max(2, min(4, worker_count))
         normal_worker_count = worker_count - PRIORITY_WORKER_COUNT
+        self._base_normal_workers = max(MIN_NORMAL_WORKERS, normal_worker_count)
+        self._desired_normal_workers = self._base_normal_workers
+        self._worker_idle_since = time.monotonic()
         self._worker_specs = [("retry", 0), ("priority", 0)]
         self._worker_specs += [("normal", i) for i in range(normal_worker_count)]
         self.workers = [self._create_worker_task(client, spec) for spec in self._worker_specs]
@@ -459,7 +540,7 @@ class BotManager:
         self.started_ok = True
         set_value("bot_status", "running")
         startup_elapsed = time.monotonic() - startup_t0
-        startup_summary = f"监听已启动：会话 {len(dialogs)}，缓存 {len(self.entity_cache)}，目标 {len(target_ok)}/{target_total}，线程 优先 {PRIORITY_WORKER_COUNT}/普通 {normal_worker_count}，耗时 {startup_elapsed:.1f}s"
+        startup_summary = f"监听已启动：会话 {dialog_count}，缓存 {len(self.entity_cache)}，目标 {len(target_ok)}/{target_total}，线程 优先 {PRIORITY_WORKER_COUNT}/普通 {normal_worker_count}，耗时 {startup_elapsed:.1f}s"
         push_event("success", startup_summary)
 
         # Keep the Telethon connection alive. We don't use run_until_disconnected
@@ -479,7 +560,12 @@ class BotManager:
             monotonic_now = time.monotonic()
             if self._monitor_filter_dirty or monotonic_now - self._monitor_filter_refresh_ts >= 60:
                 self._refresh_monitor_peer_filter()
+            if self._entity_cache_refreshed_ts and monotonic_now - self._entity_cache_refreshed_ts >= 86400:
+                await self._refresh_entity_cache(client, force=True)
+                self._monitor_filter_dirty = True
+                self._refresh_monitor_peer_filter()
             self._publish_flow_stats(monotonic_now)
+            self._reconcile_worker_targets(client)
             self._ensure_workers(client)
             # Proactive reconnect every 2h to keep connection fresh with less churn.
             if now - self._last_delay_reconnect_ts >= 7200 and not self._reconnect_requested and self._telegram_delay_high_count == 0:
@@ -672,6 +758,13 @@ class BotManager:
                 if not self.queue:
                     await asyncio.sleep(0.1)
                     continue
+                if (
+                    worker_id >= (self._desired_normal_workers or 1)
+                    and self.queue.qsize() == 0
+                    and (self.priority_queue is None or self.priority_queue.qsize() == 0)
+                ):
+                    self._retire_worker_spec(("normal", worker_id))
+                    break
                 await self._wait_for_reconnect()
                 item = await self.queue.get()
                 await self._wait_for_reconnect()
@@ -1019,8 +1112,7 @@ class BotManager:
         if not await client.is_user_authorized():
             raise ValueError("Telegram 未登录")
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
-        dialogs = await client.get_dialogs(limit=None)
-        self.entity_cache = build_entity_cache(dialogs)
+        await self._refresh_entity_cache(client, force=True)
         self._monitor_filter_dirty = True
         targets = split_dialog_values(target_raw)
         if not targets:
@@ -1061,8 +1153,7 @@ class BotManager:
         if not await client.is_user_authorized():
             raise ValueError("Telegram 未登录")
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
-        dialogs = await client.get_dialogs(limit=None)
-        self.entity_cache = build_entity_cache(dialogs)
+        await self._refresh_entity_cache(client, force=True)
         self._monitor_filter_dirty = True
         entity = await resolve_entity(client, source, cache=self.entity_cache, refresh=True)
         title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or "未知"
@@ -1103,8 +1194,7 @@ class BotManager:
         if not await client.is_user_authorized():
             raise ValueError("Telegram 未登录")
         self._verbose_log("info", "启动时刷新会话缓存，用于目标快速解析")
-        dialogs = await client.get_dialogs(limit=None)
-        self.entity_cache = build_entity_cache(dialogs)
+        dialogs = await self._refresh_entity_cache(client, force=True)
         self._monitor_filter_dirty = True
         out: list[dict] = []
         seen: set[str] = set()

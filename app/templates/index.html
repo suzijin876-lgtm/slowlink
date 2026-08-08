@@ -236,11 +236,11 @@
             <label>完整码重复<select name="dedup_code_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_code_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
             <label>普通抽奖<select name="dedup_lottery_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_lottery_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
             <label>联合抽奖<select name="dedup_joint_lottery_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_joint_lottery_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
-            <label>抽奖唯一字段
-              <select name="dedup_lottery_key_mode">
-                <option value="id" {% if dedup_lottery_key_mode=='id' %}selected{% endif %}>按抽奖 ID 去重（默认，防刷屏）</option>
-                <option value="id_keyword" {% if dedup_lottery_key_mode=='id_keyword' %}selected{% endif %}>按 抽奖 ID + 参与关键词 去重</option>
-                <option value="id_prize_keyword" {% if dedup_lottery_key_mode=='id_prize_keyword' %}selected{% endif %}>按 抽奖 ID + 奖品 + 参与关键词 去重</option>
+            <label>抽奖跨模板去重
+              <select name="dedup_lottery_template_mode">
+                <option value="global" {% if dedup_lottery_template_mode=='global' %}selected{% endif %}>全局：所有抽奖模板统一去重（默认）</option>
+                <option value="id" {% if dedup_lottery_template_mode=='id' %}selected{% endif %}>仅 ID / 种子：只有明确抽奖标识才去重</option>
+                <option value="off" {% if dedup_lottery_template_mode=='off' %}selected{% endif %}>关闭跨模板：只按原文本去重</option>
               </select>
             </label>
             <label>长期活动<select name="dedup_long_term_minutes">{% for v,t in opts %}<option value="{{v}}" {% if dedup_long_term_minutes==v %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label>
